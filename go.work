@@ -1,0 +1,13 @@
+go 1.24.0
+
+use (
+	./common
+	./libvirt-sim
+	./ovn-sim
+	./storage-sim
+	./awx-sim
+	./netbox-sim
+	./load-gen
+	./webui
+	./cmd/cirrus-sim
+)

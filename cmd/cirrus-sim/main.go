@@ -8,6 +8,7 @@
 // Default ports:
 //
 //	common (event log, faults)  :8000
+//	dashboard (web UI)          :8080
 //	libvirt-sim (management)    :8100
 //	ovn-sim (management)        :8200
 //	awx-sim                     :8300
@@ -31,6 +32,7 @@ import (
 	netboxsim "github.com/tjst-t/cirrus-sim/netbox-sim"
 	ovnsim "github.com/tjst-t/cirrus-sim/ovn-sim"
 	storagesim "github.com/tjst-t/cirrus-sim/storage-sim"
+	"github.com/tjst-t/cirrus-sim/webui"
 )
 
 // Shutdowner is implemented by all simulator servers.
@@ -46,10 +48,21 @@ func main() {
 	awxPort := flag.String("awx", envOrDefault("AWX_SIM_PORT", "8300"), "awx-sim port")
 	netboxPort := flag.String("netbox", envOrDefault("NETBOX_SIM_PORT", "8400"), "netbox-sim port")
 	storagePort := flag.String("storage", envOrDefault("STORAGE_SIM_PORT", "8500"), "storage-sim port")
+	dashboardPort := flag.String("dashboard", envOrDefault("DASHBOARD_PORT", "8080"), "dashboard web UI port")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+
+	// Build endpoint map for dashboard proxy
+	endpoints := webui.Endpoints{
+		"common":      fmt.Sprintf("http://localhost:%s", *commonPort),
+		"libvirt-sim": fmt.Sprintf("http://localhost:%s", *libvirtPort),
+		"ovn-sim":     fmt.Sprintf("http://localhost:%s", *ovnPort),
+		"awx-sim":     fmt.Sprintf("http://localhost:%s", *awxPort),
+		"netbox-sim":  fmt.Sprintf("http://localhost:%s", *netboxPort),
+		"storage-sim": fmt.Sprintf("http://localhost:%s", *storagePort),
+	}
 
 	sims := []struct {
 		name string
@@ -61,6 +74,7 @@ func main() {
 		{"awx-sim", awxsim.New(*awxPort, logger.With("sim", "awx-sim"))},
 		{"netbox-sim", netboxsim.New(*netboxPort, logger.With("sim", "netbox-sim"))},
 		{"storage-sim", storagesim.New(*storagePort, logger.With("sim", "storage-sim"))},
+		{"dashboard", webui.New(*dashboardPort, endpoints, logger.With("sim", "dashboard"))},
 	}
 
 	logger.Info("starting cirrus-sim (unified)",
@@ -70,6 +84,7 @@ func main() {
 		"awx-sim", *awxPort,
 		"netbox-sim", *netboxPort,
 		"storage-sim", *storagePort,
+		"dashboard", *dashboardPort,
 	)
 
 	for _, s := range sims {
@@ -78,6 +93,8 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Fprintf(os.Stderr, "  cirrus-sim is running\n")
+	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
+	fmt.Fprintf(os.Stderr, "  Dashboard                http://localhost:%s\n", *dashboardPort)
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
 	fmt.Fprintf(os.Stderr, "  common (events/faults)   http://localhost:%s\n", *commonPort)
 	fmt.Fprintf(os.Stderr, "  libvirt-sim (management) http://localhost:%s\n", *libvirtPort)

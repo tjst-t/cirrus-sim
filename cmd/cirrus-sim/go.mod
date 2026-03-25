@@ -9,6 +9,7 @@ require (
 	github.com/tjst-t/cirrus-sim/netbox-sim v0.0.0
 	github.com/tjst-t/cirrus-sim/ovn-sim v0.0.0
 	github.com/tjst-t/cirrus-sim/storage-sim v0.0.0
+	github.com/tjst-t/cirrus-sim/webui v0.0.0
 )
 
 require (
@@ -23,4 +24,5 @@ replace (
 	github.com/tjst-t/cirrus-sim/netbox-sim => ../../netbox-sim
 	github.com/tjst-t/cirrus-sim/ovn-sim => ../../ovn-sim
 	github.com/tjst-t/cirrus-sim/storage-sim => ../../storage-sim
+	github.com/tjst-t/cirrus-sim/webui => ../../webui
 )

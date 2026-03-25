@@ -259,6 +259,62 @@ func TestReset(t *testing.T) {
 	}
 }
 
+func TestGetMigrationConfig(t *testing.T) {
+	mux, _ := setupTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/sim/config/migration", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var cfg state.MigrationConfig
+	if err := json.NewDecoder(rec.Body).Decode(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PrepareDurationMs != 500 {
+		t.Errorf("prepare_duration_ms = %d, want 500", cfg.PrepareDurationMs)
+	}
+}
+
+func TestUpdateMigrationConfig(t *testing.T) {
+	mux, store := setupTestServer(t)
+
+	newCfg := state.MigrationConfig{
+		PrepareDurationMs:      100,
+		BaseTransferDurationMs: 500,
+		PerGBMemoryMs:          200,
+		FinishDurationMs:       50,
+	}
+	body, _ := json.Marshal(newCfg)
+	req := httptest.NewRequest(http.MethodPost, "/sim/config/migration", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+
+	got := store.GetMigrationConfig()
+	if got != newCfg {
+		t.Errorf("migration config = %+v, want %+v", got, newCfg)
+	}
+}
+
+func TestUpdateMigrationConfigInvalidBody(t *testing.T) {
+	mux, _ := setupTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/sim/config/migration", bytes.NewReader([]byte("invalid")))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestUpdateHostConfig(t *testing.T) {
 	mux, store := setupTestServer(t)
 

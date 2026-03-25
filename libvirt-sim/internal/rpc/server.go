@@ -17,6 +17,7 @@ type Server struct {
 	mu        sync.Mutex
 	listeners map[string]net.Listener // key: hostID
 	wg        sync.WaitGroup
+	eventBus  *EventBus
 }
 
 // NewServer creates a new RPC server.
@@ -25,7 +26,13 @@ func NewServer(store *state.Store, logger *slog.Logger) *Server {
 		store:     store,
 		logger:    logger,
 		listeners: make(map[string]net.Listener),
+		eventBus:  NewEventBus(),
 	}
+}
+
+// EventBusRef returns the server's event bus.
+func (s *Server) EventBusRef() *EventBus {
+	return s.eventBus
 }
 
 // StartListener starts a TCP listener for a host on the given port.
@@ -121,6 +128,10 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, hostID str
 	defer conn.Close()
 
 	handler := NewHandler(s.store, hostID, s.logger.With("host_id", hostID, "remote", conn.RemoteAddr()))
+	handler.SetEventBus(s.eventBus)
+	clientEvents := s.eventBus.RegisterClient(conn, hostID)
+	handler.SetClientEvents(clientEvents)
+	defer s.eventBus.UnregisterClient(conn)
 	s.logger.Debug("new connection", "host_id", hostID, "remote", conn.RemoteAddr())
 
 	for {

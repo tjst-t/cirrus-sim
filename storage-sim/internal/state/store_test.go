@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func newTestStore() *Store {
@@ -525,5 +526,386 @@ func TestReset(t *testing.T) {
 
 	if stats := s.GetStats(ctx); stats.BackendCount != 0 || stats.VolumeCount != 0 {
 		t.Errorf("after reset: backends=%d, volumes=%d", stats.BackendCount, stats.VolumeCount)
+	}
+}
+
+func TestCreateSnapshot(t *testing.T) {
+	tests := []struct {
+		name       string
+		volumeID   string
+		snapshotID string
+		wantErr    error
+	}{
+		{name: "success", volumeID: "v1", snapshotID: "snap-001", wantErr: nil},
+		{name: "empty snapshot id", volumeID: "v1", snapshotID: "", wantErr: ErrEmptySnapshotID},
+		{name: "volume not found", volumeID: "missing", snapshotID: "snap-002", wantErr: ErrVolumeNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore()
+			addTestBackend(t, s, "b1", 1000, 2.0)
+			ctx := context.Background()
+			if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+				t.Fatal(err)
+			}
+
+			snap, err := s.CreateSnapshot(ctx, tt.volumeID, tt.snapshotID, map[string]string{"desc": "test"})
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("got error %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if snap.SnapshotID != tt.snapshotID {
+				t.Errorf("snapshot_id = %s, want %s", snap.SnapshotID, tt.snapshotID)
+			}
+			if snap.VolumeID != tt.volumeID {
+				t.Errorf("volume_id = %s, want %s", snap.VolumeID, tt.volumeID)
+			}
+			if snap.SizeGB != 100 {
+				t.Errorf("size_gb = %d, want 100", snap.SizeGB)
+			}
+			if snap.State != "available" {
+				t.Errorf("state = %s, want available", snap.State)
+			}
+			if len(snap.ChildClones) != 0 {
+				t.Errorf("child_clones = %v, want empty", snap.ChildClones)
+			}
+
+			// Verify volume's Snapshots list is updated
+			v, _ := s.GetVolume(ctx, "v1")
+			if len(v.Snapshots) != 1 || v.Snapshots[0] != tt.snapshotID {
+				t.Errorf("volume snapshots = %v, want [%s]", v.Snapshots, tt.snapshotID)
+			}
+		})
+	}
+}
+
+func TestCreateSnapshotDuplicate(t *testing.T) {
+	s := newTestStore()
+	addTestBackend(t, s, "b1", 1000, 2.0)
+	ctx := context.Background()
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil)
+	if !errors.Is(err, ErrSnapshotExists) {
+		t.Errorf("got error %v, want %v", err, ErrSnapshotExists)
+	}
+}
+
+func TestListSnapshots(t *testing.T) {
+	s := newTestStore()
+	addTestBackend(t, s, "b1", 1000, 2.0)
+	ctx := context.Background()
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-002", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	snaps, err := s.ListSnapshots(ctx, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 2 {
+		t.Errorf("got %d snapshots, want 2", len(snaps))
+	}
+
+	// Volume not found
+	_, err = s.ListSnapshots(ctx, "missing")
+	if !errors.Is(err, ErrVolumeNotFound) {
+		t.Errorf("got error %v, want %v", err, ErrVolumeNotFound)
+	}
+}
+
+func TestDeleteSnapshot(t *testing.T) {
+	s := newTestStore()
+	addTestBackend(t, s, "b1", 1000, 2.0)
+	ctx := context.Background()
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Successful delete
+	err := s.DeleteSnapshot(ctx, "snap-001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify removed from volume's snapshot list
+	v, _ := s.GetVolume(ctx, "v1")
+	if len(v.Snapshots) != 0 {
+		t.Errorf("volume snapshots = %v, want empty", v.Snapshots)
+	}
+
+	// Not found
+	err = s.DeleteSnapshot(ctx, "snap-001")
+	if !errors.Is(err, ErrSnapshotNotFound) {
+		t.Errorf("got error %v, want %v", err, ErrSnapshotNotFound)
+	}
+}
+
+func TestDeleteSnapshotWithClones(t *testing.T) {
+	s := newTestStore()
+	addTestBackend(t, s, "b1", 1000, 2.0)
+	ctx := context.Background()
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CloneFromSnapshot(ctx, "snap-001", "clone-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	err := s.DeleteSnapshot(ctx, "snap-001")
+	if !errors.Is(err, ErrSnapshotHasClones) {
+		t.Errorf("got error %v, want %v", err, ErrSnapshotHasClones)
+	}
+}
+
+func TestCloneFromSnapshot(t *testing.T) {
+	s := newTestStore()
+	addTestBackend(t, s, "b1", 1000, 2.0)
+	ctx := context.Background()
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	clone, err := s.CloneFromSnapshot(ctx, "snap-001", "clone-001", map[string]string{"tenant": "t1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if clone.VolumeID != "clone-001" {
+		t.Errorf("volume_id = %s, want clone-001", clone.VolumeID)
+	}
+	if clone.ParentSnapshotID != "snap-001" {
+		t.Errorf("parent_snapshot_id = %s, want snap-001", clone.ParentSnapshotID)
+	}
+	if clone.SizeGB != 100 {
+		t.Errorf("size_gb = %d, want 100", clone.SizeGB)
+	}
+	if clone.State != VolumeAvailable {
+		t.Errorf("state = %s, want available", clone.State)
+	}
+	if !clone.ThinProvisioned {
+		t.Error("clone should be thin provisioned")
+	}
+	if clone.BackendID != "b1" {
+		t.Errorf("backend_id = %s, want b1", clone.BackendID)
+	}
+
+	// Verify snapshot's child_clones updated
+	snap, _ := s.GetSnapshot(ctx, "snap-001")
+	if len(snap.ChildClones) != 1 || snap.ChildClones[0] != "clone-001" {
+		t.Errorf("child_clones = %v, want [clone-001]", snap.ChildClones)
+	}
+
+	// Verify capacity tracking
+	b, _ := s.GetBackend(ctx, "b1")
+	if b.AllocatedCapacityGB != 200 {
+		t.Errorf("allocated = %d, want 200 (100 for vol + 100 for clone)", b.AllocatedCapacityGB)
+	}
+}
+
+func TestCloneFromSnapshotErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		snapID     string
+		volumeID   string
+		wantErr    error
+	}{
+		{name: "snapshot not found", snapID: "missing", volumeID: "clone-1", wantErr: ErrSnapshotNotFound},
+		{name: "empty volume id", snapID: "snap-001", volumeID: "", wantErr: ErrEmptyVolumeID},
+		{name: "volume exists", snapID: "snap-001", volumeID: "v1", wantErr: ErrVolumeExists},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore()
+			addTestBackend(t, s, "b1", 1000, 2.0)
+			ctx := context.Background()
+			if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := s.CloneFromSnapshot(ctx, tt.snapID, tt.volumeID, nil)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("got error %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCloneCapacityExceeded(t *testing.T) {
+	s := newTestStore()
+	// Small backend: capacity=100, ratio=1.5 => max=150
+	addTestBackend(t, s, "b1", 100, 1.5)
+	ctx := context.Background()
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Clone needs 100 more, total would be 200 > 150
+	_, err := s.CloneFromSnapshot(ctx, "snap-001", "clone-001", nil)
+	if !errors.Is(err, ErrInsufficientCapacity) {
+		t.Errorf("got error %v, want %v", err, ErrInsufficientCapacity)
+	}
+}
+
+func TestDeleteVolumeWithSnapshotsViaStore(t *testing.T) {
+	s := newTestStore()
+	addTestBackend(t, s, "b1", 1000, 2.0)
+	ctx := context.Background()
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	err := s.DeleteVolume(ctx, "v1")
+	if !errors.Is(err, ErrVolumeHasSnapshots) {
+		t.Errorf("got error %v, want %v", err, ErrVolumeHasSnapshots)
+	}
+}
+
+func TestStartFlatten(t *testing.T) {
+	s := newTestStore()
+	// Use very fast flatten for testing
+	s.config.FlattenPerGBMs = 1
+	addTestBackend(t, s, "b1", 1000, 2.0)
+	ctx := context.Background()
+
+	if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 10, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSnapshot(ctx, "v1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CloneFromSnapshot(ctx, "snap-001", "clone-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	op, err := s.StartFlatten(ctx, "clone-001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if op.Type != "flatten" {
+		t.Errorf("type = %s, want flatten", op.Type)
+	}
+	if op.State != OperationRunning {
+		t.Errorf("state = %s, want running", op.State)
+	}
+	if op.VolumeID != "clone-001" {
+		t.Errorf("volume_id = %s, want clone-001", op.VolumeID)
+	}
+
+	// Wait for flatten to complete (10GB * 1ms/GB = 10ms, with overhead)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := s.GetOperation(ctx, op.OperationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State == OperationCompleted {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Verify operation completed
+	finalOp, err := s.GetOperation(ctx, op.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalOp.State != OperationCompleted {
+		t.Errorf("operation state = %s, want completed", finalOp.State)
+	}
+	if finalOp.ProgressPercent != 100 {
+		t.Errorf("progress = %d, want 100", finalOp.ProgressPercent)
+	}
+
+	// Verify volume state after flatten
+	vol, err := s.GetVolume(ctx, "clone-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vol.ParentSnapshotID != "" {
+		t.Errorf("parent_snapshot_id = %s, want empty", vol.ParentSnapshotID)
+	}
+	if vol.ConsumedGB != vol.SizeGB {
+		t.Errorf("consumed_gb = %d, want %d", vol.ConsumedGB, vol.SizeGB)
+	}
+
+	// Verify snapshot's child_clones no longer has clone-001
+	snap, err := s.GetSnapshot(ctx, "snap-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.ChildClones) != 0 {
+		t.Errorf("child_clones = %v, want empty", snap.ChildClones)
+	}
+}
+
+func TestStartFlattenErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		volumeID string
+		wantErr  error
+	}{
+		{name: "volume not found", volumeID: "missing", wantErr: ErrVolumeNotFound},
+		{name: "no parent snapshot", volumeID: "v1", wantErr: ErrVolumeNoParent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore()
+			addTestBackend(t, s, "b1", 1000, 2.0)
+			ctx := context.Background()
+			if _, err := s.CreateVolume(ctx, Volume{VolumeID: "v1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := s.StartFlatten(ctx, tt.volumeID)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("got error %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGetOperationNotFound(t *testing.T) {
+	s := newTestStore()
+	_, err := s.GetOperation(context.Background(), "missing")
+	if !errors.Is(err, ErrOperationNotFound) {
+		t.Errorf("got error %v, want %v", err, ErrOperationNotFound)
 	}
 }

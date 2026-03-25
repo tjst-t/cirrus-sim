@@ -22,7 +22,27 @@ var (
 	ErrHostExists = errors.New("host already exists")
 	// ErrPortInUse indicates the port is already used by another host.
 	ErrPortInUse = errors.New("port already in use")
+	// ErrMigrationInProgress indicates a migration is already in progress for this domain.
+	ErrMigrationInProgress = errors.New("migration already in progress")
 )
+
+// MigrationConfig controls simulated migration timing.
+type MigrationConfig struct {
+	PrepareDurationMs      int64 `json:"prepare_duration_ms"`
+	BaseTransferDurationMs int64 `json:"base_transfer_duration_ms"`
+	PerGBMemoryMs          int64 `json:"per_gb_memory_ms"`
+	FinishDurationMs       int64 `json:"finish_duration_ms"`
+}
+
+// DefaultMigrationConfig returns the default migration config.
+func DefaultMigrationConfig() MigrationConfig {
+	return MigrationConfig{
+		PrepareDurationMs:      500,
+		BaseTransferDurationMs: 2000,
+		PerGBMemoryMs:          500,
+		FinishDurationMs:       200,
+	}
+}
 
 // Store is the top-level in-memory store for all hosts and their domains.
 type Store struct {
@@ -31,16 +51,52 @@ type Store struct {
 	ports map[int]string   // key: port, value: host_id
 
 	nextDomainID atomic.Int32
+
+	migrationConfigMu sync.RWMutex
+	migrationConfig   MigrationConfig
+
+	migrationSpeedMu sync.RWMutex
+	migrationSpeed   uint64 // max bandwidth in MiB/s, per-domain default
 }
 
 // NewStore creates a new empty Store.
 func NewStore() *Store {
 	s := &Store{
-		hosts: make(map[string]*Host),
-		ports: make(map[int]string),
+		hosts:           make(map[string]*Host),
+		ports:           make(map[int]string),
+		migrationConfig: DefaultMigrationConfig(),
+		migrationSpeed:  9223372036, // effectively unlimited
 	}
 	s.nextDomainID.Store(1)
 	return s
+}
+
+// GetMigrationConfig returns the current migration config.
+func (s *Store) GetMigrationConfig() MigrationConfig {
+	s.migrationConfigMu.RLock()
+	defer s.migrationConfigMu.RUnlock()
+	return s.migrationConfig
+}
+
+// SetMigrationConfig updates the migration config.
+func (s *Store) SetMigrationConfig(cfg MigrationConfig) {
+	s.migrationConfigMu.Lock()
+	defer s.migrationConfigMu.Unlock()
+	s.migrationConfig = cfg
+}
+
+// GetMigrationSpeed returns the max migration bandwidth.
+func (s *Store) GetMigrationSpeed() uint64 {
+	s.migrationSpeedMu.RLock()
+	defer s.migrationSpeedMu.RUnlock()
+	return s.migrationSpeed
+}
+
+// SetMigrationSpeed sets the max migration bandwidth.
+func (s *Store) SetMigrationSpeed(speed uint64) {
+	s.migrationSpeedMu.Lock()
+	defer s.migrationSpeedMu.Unlock()
+	s.migrationSpeed = speed
 }
 
 // AddHost registers a new host. Returns error if host ID or port already in use.
@@ -132,6 +188,14 @@ func (s *Store) Reset() {
 	s.hosts = make(map[string]*Host)
 	s.ports = make(map[int]string)
 	s.nextDomainID.Store(1)
+
+	s.migrationConfigMu.Lock()
+	s.migrationConfig = DefaultMigrationConfig()
+	s.migrationConfigMu.Unlock()
+
+	s.migrationSpeedMu.Lock()
+	s.migrationSpeed = 9223372036
+	s.migrationSpeedMu.Unlock()
 }
 
 // DefineDomain adds a domain to a host in shutoff state.
@@ -336,6 +400,141 @@ func (s *Store) UndefineDomain(hostID string, uuid string) error {
 
 	if d.State != DomainStateShutoff {
 		return fmt.Errorf("cannot undefine running domain %s: %w", uuid, ErrOperationInvalid)
+	}
+
+	delete(h.Domains, uuid)
+	return nil
+}
+
+// MigratePrepare reserves resources on the destination host for incoming migration.
+// It creates a placeholder domain in "paused" state with MigrationStatePrepared.
+func (s *Store) MigratePrepare(destHostID string, dom *Domain) error {
+	h, err := s.GetHost(destHostID)
+	if err != nil {
+		return fmt.Errorf("migrate prepare: %w", err)
+	}
+
+	if h.State != HostStateOnline {
+		return fmt.Errorf("destination host %s not online: %w", destHostID, ErrOperationDenied)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Check if domain already exists on destination
+	if _, exists := h.Domains[dom.UUIDString()]; exists {
+		return fmt.Errorf("domain %s already exists on destination host %s: %w",
+			dom.UUIDString(), destHostID, ErrOperationInvalid)
+	}
+
+	// Check resources
+	usedVCPUs := 0
+	var usedMemMB int64
+	for _, d := range h.Domains {
+		if d.State == DomainStateRunning || d.State == DomainStatePaused {
+			usedVCPUs += d.VCPUs
+			usedMemMB += d.MemoryKiB / 1024
+		}
+	}
+
+	if usedVCPUs+dom.VCPUs > h.AvailableVCPUs() {
+		return fmt.Errorf("insufficient vCPUs on destination host %s: %w", destHostID, ErrOperationDenied)
+	}
+
+	memMB := dom.MemoryKiB / 1024
+	if usedMemMB+memMB > h.AvailableMemoryMB() {
+		return fmt.Errorf("insufficient memory on destination host %s: %w", destHostID, ErrOperationDenied)
+	}
+
+	// Create placeholder domain
+	placeholder := &Domain{
+		Name:            dom.Name,
+		UUID:            dom.UUID,
+		ID:              -1,
+		State:           DomainStatePaused,
+		VCPUs:           dom.VCPUs,
+		MemoryKiB:       dom.MemoryKiB,
+		XML:             dom.XML,
+		CreatedAt:       dom.CreatedAt,
+		MigrationState:  MigrationStatePrepared,
+		MigrationCookie: dom.UUIDString(),
+	}
+	h.Domains[dom.UUIDString()] = placeholder
+	return nil
+}
+
+// MigratePerform marks a domain on the source host as migrating.
+func (s *Store) MigratePerform(srcHostID string, uuid string) error {
+	h, err := s.GetHost(srcHostID)
+	if err != nil {
+		return fmt.Errorf("migrate perform: %w", err)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	d, ok := h.Domains[uuid]
+	if !ok {
+		return fmt.Errorf("domain %s: %w", uuid, ErrNoDomain)
+	}
+
+	if d.State != DomainStateRunning {
+		return fmt.Errorf("cannot migrate domain %s in state %d: %w", uuid, d.State, ErrOperationInvalid)
+	}
+
+	if d.MigrationState != MigrationStateNone {
+		return fmt.Errorf("domain %s: %w", uuid, ErrMigrationInProgress)
+	}
+
+	d.MigrationState = MigrationStatePerforming
+	d.MigrationCookie = uuid
+	return nil
+}
+
+// MigrateFinish activates the domain on the destination host.
+func (s *Store) MigrateFinish(destHostID string, uuid string) (*Domain, error) {
+	h, err := s.GetHost(destHostID)
+	if err != nil {
+		return nil, fmt.Errorf("migrate finish: %w", err)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	d, ok := h.Domains[uuid]
+	if !ok {
+		return nil, fmt.Errorf("domain %s on destination: %w", uuid, ErrNoDomain)
+	}
+
+	if d.MigrationState != MigrationStatePrepared {
+		return nil, fmt.Errorf("domain %s not in prepared state: %w", uuid, ErrOperationInvalid)
+	}
+
+	d.State = DomainStateRunning
+	d.ID = s.nextDomainID.Add(1) - 1
+	d.StartedAt = time.Now()
+	d.MigrationState = MigrationStateNone
+	d.MigrationCookie = ""
+	return d, nil
+}
+
+// MigrateConfirm removes the domain from the source host after successful migration.
+func (s *Store) MigrateConfirm(srcHostID string, uuid string) error {
+	h, err := s.GetHost(srcHostID)
+	if err != nil {
+		return fmt.Errorf("migrate confirm: %w", err)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	d, ok := h.Domains[uuid]
+	if !ok {
+		return fmt.Errorf("domain %s: %w", uuid, ErrNoDomain)
+	}
+
+	if d.MigrationState != MigrationStatePerforming {
+		return fmt.Errorf("domain %s not in migrating state: %w", uuid, ErrOperationInvalid)
 	}
 
 	delete(h.Domains, uuid)

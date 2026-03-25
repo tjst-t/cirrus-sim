@@ -11,9 +11,11 @@ import (
 
 // Handler processes libvirt RPC requests for a specific host.
 type Handler struct {
-	store  *state.Store
-	hostID string
-	logger *slog.Logger
+	store        *state.Store
+	hostID       string
+	logger       *slog.Logger
+	clientEvents *ClientEvents
+	eventBus     *EventBus
 }
 
 // NewHandler creates a new RPC handler for a host.
@@ -23,6 +25,16 @@ func NewHandler(store *state.Store, hostID string, logger *slog.Logger) *Handler
 		hostID: hostID,
 		logger: logger,
 	}
+}
+
+// SetClientEvents sets the client event tracker for this handler.
+func (h *Handler) SetClientEvents(ce *ClientEvents) {
+	h.clientEvents = ce
+}
+
+// SetEventBus sets the event bus for this handler.
+func (h *Handler) SetEventBus(eb *EventBus) {
+	h.eventBus = eb
 }
 
 // HandleMessage dispatches an RPC message to the appropriate handler.
@@ -74,6 +86,22 @@ func (h *Handler) HandleMessage(msg *Message) *Message {
 		return h.handleNodeGetFreeMemory(msg)
 	case ProcConnectGetAllDomainStats:
 		return h.handleGetAllDomainStats(msg)
+	case ProcConnectDomainEventRegisterAny:
+		return h.handleDomainEventRegisterAny(msg)
+	case ProcConnectDomainEventDeregisterAny:
+		return h.handleDomainEventDeregisterAny(msg)
+	case ProcDomainMigratePrepare3Params:
+		return h.handleMigratePrepare3Params(msg)
+	case ProcDomainMigratePerform3Params:
+		return h.handleMigratePerform3Params(msg)
+	case ProcDomainMigrateFinish3Params:
+		return h.handleMigrateFinish3Params(msg)
+	case ProcDomainMigrateConfirm3Params:
+		return h.handleMigrateConfirm3Params(msg)
+	case ProcDomainMigrateGetMaxSpeed:
+		return h.handleMigrateGetMaxSpeed(msg)
+	case ProcDomainMigrateSetMaxSpeed:
+		return h.handleMigrateSetMaxSpeed(msg)
 	default:
 		h.logger.Warn("unhandled procedure", "procedure", msg.Header.Procedure)
 		return h.errorReply(msg, VirErrInternalError, fmt.Sprintf("unhandled procedure %d", msg.Header.Procedure))
@@ -199,6 +227,7 @@ func (h *Handler) handleDomainDefineXMLFlags(msg *Message) *Message {
 	}
 
 	h.logger.Info("domain defined", "name", dom.Name, "uuid", dom.UUIDString())
+	h.emitEvent(dom, DomainEventDefined, DomainEventDetailAdded)
 	return h.domainReply(msg, dom)
 }
 
@@ -219,6 +248,8 @@ func (h *Handler) handleDomainCreateWithFlags(msg *Message) *Message {
 	}
 
 	h.logger.Info("domain started", "name", dom.Name, "uuid", dom.UUIDString())
+	h.emitEvent(dom, DomainEventStarted, DomainEventDetailBooted)
+	h.emitEvent(dom, DomainEventResumed, DomainEventDetailUnpaused)
 	return h.domainReply(msg, dom)
 }
 
@@ -236,6 +267,7 @@ func (h *Handler) handleDomainDestroyFlags(msg *Message) *Message {
 	}
 
 	h.logger.Info("domain destroyed", "name", dom.Name, "uuid", dom.UUIDString())
+	h.emitEvent(dom, DomainEventStopped, DomainEventDetailDestroyed)
 	return NewReply(&msg.Header, StatusOK, nil)
 }
 
@@ -253,6 +285,7 @@ func (h *Handler) handleDomainShutdownFlags(msg *Message) *Message {
 	}
 
 	h.logger.Info("domain shutdown", "name", dom.Name, "uuid", dom.UUIDString())
+	h.emitEvent(dom, DomainEventStopped, DomainEventDetailShutdown)
 	return NewReply(&msg.Header, StatusOK, nil)
 }
 
@@ -270,6 +303,7 @@ func (h *Handler) handleDomainSuspend(msg *Message) *Message {
 	}
 
 	h.logger.Info("domain suspended", "name", dom.Name)
+	h.emitEvent(dom, DomainEventSuspended, DomainEventDetailPaused)
 	return NewReply(&msg.Header, StatusOK, nil)
 }
 
@@ -287,6 +321,7 @@ func (h *Handler) handleDomainResume(msg *Message) *Message {
 	}
 
 	h.logger.Info("domain resumed", "name", dom.Name)
+	h.emitEvent(dom, DomainEventResumed, DomainEventDetailUnpaused)
 	return NewReply(&msg.Header, StatusOK, nil)
 }
 
@@ -419,6 +454,7 @@ func (h *Handler) handleDomainUndefineFlags(msg *Message) *Message {
 	}
 
 	h.logger.Info("domain undefined", "name", dom.Name, "uuid", dom.UUIDString())
+	h.emitEvent(dom, DomainEventUndefined, DomainEventDetailRemoved)
 	return NewReply(&msg.Header, StatusOK, nil)
 }
 
@@ -498,6 +534,13 @@ func (h *Handler) encodeDomainRef(enc *XDREncoder, dom *state.Domain) {
 	enc.WriteString(dom.Name)
 	enc.WriteUUID(dom.UUID)
 	enc.WriteInt32(dom.ID)
+}
+
+// emitEvent emits a domain lifecycle event if the event bus is configured.
+func (h *Handler) emitEvent(dom *state.Domain, event int32, detail int32) {
+	if h.eventBus != nil {
+		h.eventBus.EmitDomainLifecycleEvent(h.hostID, dom, event, detail)
+	}
 }
 
 // errorReply creates an error reply message.

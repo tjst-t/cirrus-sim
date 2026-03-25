@@ -38,6 +38,8 @@ func (m *Management) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sim/hosts/{host_id}/config", m.handleUpdateHostConfig)
 	mux.HandleFunc("GET /sim/stats", m.handleGetStats)
 	mux.HandleFunc("POST /sim/reset", m.handleReset)
+	mux.HandleFunc("POST /sim/config/migration", m.handleUpdateMigrationConfig)
+	mux.HandleFunc("GET /sim/config/migration", m.handleGetMigrationConfig)
 }
 
 // CreateHostRequest is the request body for POST /sim/hosts.
@@ -198,6 +200,27 @@ func (m *Management) handleReset(w http.ResponseWriter, r *http.Request) {
 	m.store.Reset()
 	m.logger.Info("all state reset")
 	m.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (m *Management) handleGetMigrationConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := m.store.GetMigrationConfig()
+	m.writeJSON(w, http.StatusOK, cfg)
+}
+
+func (m *Management) handleUpdateMigrationConfig(w http.ResponseWriter, r *http.Request) {
+	var cfg state.MigrationConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		m.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+
+	m.store.SetMigrationConfig(cfg)
+	m.logger.Info("migration config updated",
+		"prepare_ms", cfg.PrepareDurationMs,
+		"base_transfer_ms", cfg.BaseTransferDurationMs,
+		"per_gb_ms", cfg.PerGBMemoryMs,
+		"finish_ms", cfg.FinishDurationMs)
+	m.writeJSON(w, http.StatusOK, cfg)
 }
 
 func (m *Management) writeJSON(w http.ResponseWriter, status int, v interface{}) {

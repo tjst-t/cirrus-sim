@@ -27,6 +27,18 @@ const (
 	DomainStatePMSuspended DomainState = 7
 )
 
+// MigrationState tracks the migration status of a domain.
+type MigrationState int32
+
+const (
+	// MigrationStateNone indicates no migration is in progress.
+	MigrationStateNone MigrationState = 0
+	// MigrationStatePrepared indicates resources are reserved on destination.
+	MigrationStatePrepared MigrationState = 1
+	// MigrationStatePerforming indicates migration is in progress from source.
+	MigrationStatePerforming MigrationState = 2
+)
+
 // Domain represents a simulated libvirt domain (VM).
 type Domain struct {
 	Name      string      `json:"name"`
@@ -38,6 +50,10 @@ type Domain struct {
 	XML       string      `json:"xml"`
 	CreatedAt time.Time   `json:"created_at"`
 	StartedAt time.Time   `json:"started_at,omitempty"`
+
+	// Migration tracking fields.
+	MigrationState MigrationState `json:"migration_state,omitempty"`
+	MigrationCookie string        `json:"migration_cookie,omitempty"`
 }
 
 // UUIDString returns the UUID as a formatted string.

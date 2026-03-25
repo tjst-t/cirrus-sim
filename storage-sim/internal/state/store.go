@@ -9,6 +9,42 @@ import (
 	"time"
 )
 
+// Snapshot represents a point-in-time snapshot of a volume.
+type Snapshot struct {
+	SnapshotID  string            `json:"snapshot_id"`
+	VolumeID    string            `json:"volume_id"`
+	SizeGB      int64             `json:"size_gb"`
+	ConsumedGB  int64             `json:"consumed_gb"`
+	State       string            `json:"state"`
+	ChildClones []string          `json:"child_clones"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+}
+
+// OperationState represents the state of an async operation.
+type OperationState string
+
+const (
+	// OperationRunning indicates the operation is in progress.
+	OperationRunning OperationState = "running"
+	// OperationCompleted indicates the operation finished successfully.
+	OperationCompleted OperationState = "completed"
+	// OperationFailed indicates the operation failed.
+	OperationFailed OperationState = "failed"
+)
+
+// Operation represents an async operation such as flatten.
+type Operation struct {
+	OperationID         string         `json:"operation_id"`
+	Type                string         `json:"type"`
+	VolumeID            string         `json:"volume_id"`
+	State               OperationState `json:"state"`
+	ProgressPercent     int            `json:"progress_percent"`
+	ElapsedMs           int64          `json:"elapsed_ms"`
+	EstimatedRemainingMs int64         `json:"estimated_remaining_ms"`
+	StartedAt           time.Time      `json:"started_at"`
+}
+
 // BackendState represents the operational state of a storage backend.
 type BackendState string
 
@@ -54,17 +90,18 @@ type Backend struct {
 
 // Volume represents a storage volume.
 type Volume struct {
-	VolumeID        string            `json:"volume_id"`
-	BackendID       string            `json:"backend_id"`
-	SizeGB          int64             `json:"size_gb"`
-	ConsumedGB      int64             `json:"consumed_gb"`
-	ThinProvisioned bool              `json:"thin_provisioned"`
-	State           VolumeState       `json:"state"`
-	QoSPolicy       *QoSPolicy        `json:"qos_policy,omitempty"`
-	Metadata        map[string]string `json:"metadata,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	ExportInfo      *ExportInfo       `json:"export_info,omitempty"`
-	Snapshots       []string          `json:"snapshots,omitempty"`
+	VolumeID         string            `json:"volume_id"`
+	BackendID        string            `json:"backend_id"`
+	SizeGB           int64             `json:"size_gb"`
+	ConsumedGB       int64             `json:"consumed_gb"`
+	ThinProvisioned  bool              `json:"thin_provisioned"`
+	State            VolumeState       `json:"state"`
+	QoSPolicy        *QoSPolicy        `json:"qos_policy,omitempty"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	ExportInfo       *ExportInfo       `json:"export_info,omitempty"`
+	Snapshots        []string          `json:"snapshots,omitempty"`
+	ParentSnapshotID string            `json:"parent_snapshot_id,omitempty"`
 }
 
 // ExportInfo holds details about an exported volume.
@@ -76,6 +113,7 @@ type ExportInfo struct {
 // SimConfig holds simulation configuration.
 type SimConfig struct {
 	DefaultLatencyMs int `json:"default_latency_ms"`
+	FlattenPerGBMs   int `json:"flatten_per_gb_ms,omitempty"`
 }
 
 // Stats holds overall simulation statistics.
@@ -87,11 +125,15 @@ type Stats struct {
 
 // Store is a thread-safe in-memory state store for storage simulation.
 type Store struct {
-	mu       sync.RWMutex
-	backends map[string]*Backend
-	volumes  map[string]*Volume
-	config   SimConfig
-	logger   *slog.Logger
+	mu         sync.RWMutex
+	backends   map[string]*Backend
+	volumes    map[string]*Volume
+	snapshots  map[string]*Snapshot
+	operations map[string]*Operation
+	config     SimConfig
+	logger     *slog.Logger
+	opCounter  int
+	timeNow    func() time.Time // injectable clock for testing
 }
 
 // NewStore creates a new empty Store.
@@ -100,10 +142,13 @@ func NewStore(logger *slog.Logger) *Store {
 		logger = slog.Default()
 	}
 	return &Store{
-		backends: make(map[string]*Backend),
-		volumes:  make(map[string]*Volume),
-		config:   SimConfig{DefaultLatencyMs: 2},
-		logger:   logger,
+		backends:   make(map[string]*Backend),
+		volumes:    make(map[string]*Volume),
+		snapshots:  make(map[string]*Snapshot),
+		operations: make(map[string]*Operation),
+		config:     SimConfig{DefaultLatencyMs: 2, FlattenPerGBMs: 100},
+		logger:     logger,
+		timeNow:    time.Now,
 	}
 }
 
@@ -396,8 +441,291 @@ func (s *Store) Reset(_ context.Context) {
 	defer s.mu.Unlock()
 	s.backends = make(map[string]*Backend)
 	s.volumes = make(map[string]*Volume)
-	s.config = SimConfig{DefaultLatencyMs: 2}
+	s.snapshots = make(map[string]*Snapshot)
+	s.operations = make(map[string]*Operation)
+	s.config = SimConfig{DefaultLatencyMs: 2, FlattenPerGBMs: 100}
+	s.opCounter = 0
 	s.logger.Info("state reset")
+}
+
+// CreateSnapshot creates a snapshot for a volume.
+func (s *Store) CreateSnapshot(_ context.Context, volumeID string, snapshotID string, metadata map[string]string) (*Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if snapshotID == "" {
+		return nil, fmt.Errorf("create snapshot: %w", ErrEmptySnapshotID)
+	}
+	if _, exists := s.snapshots[snapshotID]; exists {
+		return nil, fmt.Errorf("create snapshot %q: %w", snapshotID, ErrSnapshotExists)
+	}
+
+	v, ok := s.volumes[volumeID]
+	if !ok {
+		return nil, fmt.Errorf("create snapshot for volume %q: %w", volumeID, ErrVolumeNotFound)
+	}
+
+	snap := &Snapshot{
+		SnapshotID:  snapshotID,
+		VolumeID:    volumeID,
+		SizeGB:      v.SizeGB,
+		ConsumedGB:  0,
+		State:       "available",
+		ChildClones: []string{},
+		Metadata:    metadata,
+		CreatedAt:   s.timeNow(),
+	}
+
+	s.snapshots[snapshotID] = snap
+	v.Snapshots = append(v.Snapshots, snapshotID)
+	s.logger.Info("snapshot created", "snapshot_id", snapshotID, "volume_id", volumeID)
+	cp := *snap
+	return &cp, nil
+}
+
+// ListSnapshots returns all snapshots for a volume.
+func (s *Store) ListSnapshots(_ context.Context, volumeID string) ([]Snapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	v, ok := s.volumes[volumeID]
+	if !ok {
+		return nil, fmt.Errorf("list snapshots for volume %q: %w", volumeID, ErrVolumeNotFound)
+	}
+
+	result := make([]Snapshot, 0, len(v.Snapshots))
+	for _, sid := range v.Snapshots {
+		if snap, ok := s.snapshots[sid]; ok {
+			result = append(result, *snap)
+		}
+	}
+	return result, nil
+}
+
+// GetSnapshot returns a snapshot by ID.
+func (s *Store) GetSnapshot(_ context.Context, snapshotID string) (*Snapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snap, ok := s.snapshots[snapshotID]
+	if !ok {
+		return nil, fmt.Errorf("get snapshot %q: %w", snapshotID, ErrSnapshotNotFound)
+	}
+	cp := *snap
+	return &cp, nil
+}
+
+// DeleteSnapshot removes a snapshot if it has no child clones.
+func (s *Store) DeleteSnapshot(_ context.Context, snapshotID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	snap, ok := s.snapshots[snapshotID]
+	if !ok {
+		return fmt.Errorf("delete snapshot %q: %w", snapshotID, ErrSnapshotNotFound)
+	}
+	if len(snap.ChildClones) > 0 {
+		return fmt.Errorf("delete snapshot %q: %w", snapshotID, ErrSnapshotHasClones)
+	}
+
+	// Remove snapshot ID from parent volume's Snapshots list
+	if v, ok := s.volumes[snap.VolumeID]; ok {
+		for i, sid := range v.Snapshots {
+			if sid == snapshotID {
+				v.Snapshots = append(v.Snapshots[:i], v.Snapshots[i+1:]...)
+				break
+			}
+		}
+	}
+
+	delete(s.snapshots, snapshotID)
+	s.logger.Info("snapshot deleted", "snapshot_id", snapshotID)
+	return nil
+}
+
+// CloneFromSnapshot creates a new volume cloned from a snapshot.
+func (s *Store) CloneFromSnapshot(_ context.Context, snapshotID string, volumeID string, metadata map[string]string) (*Volume, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if volumeID == "" {
+		return nil, fmt.Errorf("clone from snapshot: %w", ErrEmptyVolumeID)
+	}
+	if _, exists := s.volumes[volumeID]; exists {
+		return nil, fmt.Errorf("clone from snapshot %q: %w", volumeID, ErrVolumeExists)
+	}
+
+	snap, ok := s.snapshots[snapshotID]
+	if !ok {
+		return nil, fmt.Errorf("clone from snapshot %q: %w", snapshotID, ErrSnapshotNotFound)
+	}
+
+	// Find the source volume to get the backend
+	srcVol, ok := s.volumes[snap.VolumeID]
+	if !ok {
+		return nil, fmt.Errorf("clone from snapshot %q: source volume %q: %w", snapshotID, snap.VolumeID, ErrVolumeNotFound)
+	}
+
+	b, ok := s.backends[srcVol.BackendID]
+	if !ok {
+		return nil, fmt.Errorf("clone from snapshot %q: backend %q: %w", snapshotID, srcVol.BackendID, ErrBackendNotFound)
+	}
+
+	if b.State != BackendActive {
+		return nil, fmt.Errorf("clone from snapshot %q on backend %q (state %s): %w", snapshotID, srcVol.BackendID, b.State, ErrBackendNotActive)
+	}
+
+	// Capacity check: clone counts against allocated_capacity_gb (thin provisioned)
+	maxAlloc := int64(float64(b.TotalCapacityGB) * b.OverprovisionRatio)
+	if b.AllocatedCapacityGB+snap.SizeGB > maxAlloc {
+		return nil, fmt.Errorf("clone from snapshot %q: %w", snapshotID, ErrInsufficientCapacity)
+	}
+	b.AllocatedCapacityGB += snap.SizeGB
+
+	clone := &Volume{
+		VolumeID:         volumeID,
+		BackendID:        srcVol.BackendID,
+		SizeGB:           snap.SizeGB,
+		ConsumedGB:       0,
+		ThinProvisioned:  true,
+		State:            VolumeAvailable,
+		Metadata:         metadata,
+		CreatedAt:        s.timeNow(),
+		ParentSnapshotID: snapshotID,
+	}
+
+	s.volumes[volumeID] = clone
+	snap.ChildClones = append(snap.ChildClones, volumeID)
+	s.logger.Info("volume cloned from snapshot", "volume_id", volumeID, "snapshot_id", snapshotID)
+	cp := *clone
+	return &cp, nil
+}
+
+// StartFlatten begins an async flatten operation for a volume.
+func (s *Store) StartFlatten(ctx context.Context, volumeID string) (*Operation, error) {
+	s.mu.Lock()
+
+	v, ok := s.volumes[volumeID]
+	if !ok {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("flatten volume %q: %w", volumeID, ErrVolumeNotFound)
+	}
+	if v.ParentSnapshotID == "" {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("flatten volume %q: %w", volumeID, ErrVolumeNoParent)
+	}
+
+	s.opCounter++
+	opID := fmt.Sprintf("op-%03d", s.opCounter)
+
+	flattenPerGBMs := s.config.FlattenPerGBMs
+	if flattenPerGBMs <= 0 {
+		flattenPerGBMs = 100
+	}
+	durationMs := int64(v.SizeGB) * int64(flattenPerGBMs)
+
+	op := &Operation{
+		OperationID:         opID,
+		Type:                "flatten",
+		VolumeID:            volumeID,
+		State:               OperationRunning,
+		ProgressPercent:     0,
+		ElapsedMs:           0,
+		EstimatedRemainingMs: durationMs,
+		StartedAt:           s.timeNow(),
+	}
+
+	s.operations[opID] = op
+	s.logger.Info("flatten started", "operation_id", opID, "volume_id", volumeID, "duration_ms", durationMs)
+
+	cp := *op
+	s.mu.Unlock()
+
+	// Run the flatten in a goroutine
+	go s.runFlatten(ctx, opID, volumeID, durationMs)
+
+	return &cp, nil
+}
+
+// runFlatten simulates async flatten progress.
+func (s *Store) runFlatten(_ context.Context, opID string, volumeID string, durationMs int64) {
+	// Update progress in steps
+	steps := 10
+	stepDuration := time.Duration(durationMs/int64(steps)) * time.Millisecond
+
+	for i := 1; i <= steps; i++ {
+		time.Sleep(stepDuration)
+
+		s.mu.Lock()
+		op, ok := s.operations[opID]
+		if !ok {
+			s.mu.Unlock()
+			return
+		}
+		elapsed := time.Since(op.StartedAt).Milliseconds()
+		progress := int(float64(i) / float64(steps) * 100)
+		if progress > 100 {
+			progress = 100
+		}
+		remaining := durationMs - elapsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		op.ProgressPercent = progress
+		op.ElapsedMs = elapsed
+		op.EstimatedRemainingMs = remaining
+		s.mu.Unlock()
+	}
+
+	// Complete the flatten
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	op, ok := s.operations[opID]
+	if !ok {
+		return
+	}
+
+	v, ok := s.volumes[volumeID]
+	if !ok {
+		op.State = OperationFailed
+		return
+	}
+
+	parentSnapID := v.ParentSnapshotID
+
+	// Update volume
+	v.ConsumedGB = v.SizeGB
+	v.ParentSnapshotID = ""
+
+	// Remove volume from snapshot's child_clones
+	if snap, ok := s.snapshots[parentSnapID]; ok {
+		for i, cid := range snap.ChildClones {
+			if cid == volumeID {
+				snap.ChildClones = append(snap.ChildClones[:i], snap.ChildClones[i+1:]...)
+				break
+			}
+		}
+	}
+
+	op.State = OperationCompleted
+	op.ProgressPercent = 100
+	op.ElapsedMs = time.Since(op.StartedAt).Milliseconds()
+	op.EstimatedRemainingMs = 0
+	s.logger.Info("flatten completed", "operation_id", opID, "volume_id", volumeID)
+}
+
+// GetOperation returns an operation by ID.
+func (s *Store) GetOperation(_ context.Context, opID string) (*Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	op, ok := s.operations[opID]
+	if !ok {
+		return nil, fmt.Errorf("get operation %q: %w", opID, ErrOperationNotFound)
+	}
+	cp := *op
+	return &cp, nil
 }
 
 // Sentinel errors for the state package.
@@ -415,4 +743,10 @@ var (
 	ErrVolumeNotExported    = fmt.Errorf("volume is not exported")
 	ErrInsufficientCapacity = fmt.Errorf("insufficient storage capacity")
 	ErrShrinkNotAllowed     = fmt.Errorf("shrinking volumes is not allowed")
+	ErrEmptySnapshotID      = fmt.Errorf("snapshot_id is required")
+	ErrSnapshotExists       = fmt.Errorf("snapshot already exists")
+	ErrSnapshotNotFound     = fmt.Errorf("snapshot not found")
+	ErrSnapshotHasClones    = fmt.Errorf("snapshot has active clones")
+	ErrVolumeNoParent       = fmt.Errorf("volume has no parent snapshot")
+	ErrOperationNotFound    = fmt.Errorf("operation not found")
 )

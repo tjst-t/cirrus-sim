@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/tjst-t/cirrus-sim/storage-sim/internal/state"
 )
@@ -346,6 +347,313 @@ func TestHandleExportUnexport(t *testing.T) {
 	}
 	if vol.State != state.VolumeAvailable {
 		t.Errorf("state = %s, want available", vol.State)
+	}
+}
+
+func TestHandleCreateSnapshot(t *testing.T) {
+	tests := []struct {
+		name       string
+		volumeID   string
+		body       map[string]any
+		wantStatus int
+	}{
+		{
+			name:     "success",
+			volumeID: "vol-1",
+			body: map[string]any{
+				"snapshot_id": "snap-001",
+				"metadata":    map[string]string{"description": "before-upgrade"},
+			},
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:     "volume not found",
+			volumeID: "missing",
+			body: map[string]any{
+				"snapshot_id": "snap-002",
+			},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:     "empty snapshot id",
+			volumeID: "vol-1",
+			body: map[string]any{
+				"snapshot_id": "",
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, store := setupTestServer()
+			addBackend(t, store, "b1")
+			if _, err := store.CreateVolume(context.Background(), state.Volume{VolumeID: "vol-1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+				t.Fatal(err)
+			}
+
+			body, _ := json.Marshal(tt.body)
+			req := httptest.NewRequest("POST", "/api/v1/volumes/"+tt.volumeID+"/snapshots", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d, body: %s", w.Code, tt.wantStatus, w.Body.String())
+			}
+
+			if tt.wantStatus == http.StatusCreated {
+				var snap state.Snapshot
+				if err := json.NewDecoder(w.Body).Decode(&snap); err != nil {
+					t.Fatal(err)
+				}
+				if snap.SnapshotID != "snap-001" {
+					t.Errorf("snapshot_id = %s, want snap-001", snap.SnapshotID)
+				}
+				if snap.VolumeID != "vol-1" {
+					t.Errorf("volume_id = %s, want vol-1", snap.VolumeID)
+				}
+				if snap.SizeGB != 100 {
+					t.Errorf("size_gb = %d, want 100", snap.SizeGB)
+				}
+				if snap.State != "available" {
+					t.Errorf("state = %s, want available", snap.State)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleListSnapshots(t *testing.T) {
+	mux, store := setupTestServer()
+	addBackend(t, store, "b1")
+	ctx := context.Background()
+	if _, err := store.CreateVolume(ctx, state.Volume{VolumeID: "vol-1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSnapshot(ctx, "vol-1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSnapshot(ctx, "vol-1", "snap-002", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/volumes/vol-1/snapshots", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var snaps []state.Snapshot
+	if err := json.NewDecoder(w.Body).Decode(&snaps); err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 2 {
+		t.Errorf("got %d snapshots, want 2", len(snaps))
+	}
+}
+
+func TestHandleDeleteSnapshot(t *testing.T) {
+	tests := []struct {
+		name       string
+		snapshotID string
+		hasClones  bool
+		wantStatus int
+	}{
+		{name: "success", snapshotID: "snap-001", hasClones: false, wantStatus: http.StatusNoContent},
+		{name: "not found", snapshotID: "missing", hasClones: false, wantStatus: http.StatusNotFound},
+		{name: "has clones", snapshotID: "snap-001", hasClones: true, wantStatus: http.StatusConflict},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, store := setupTestServer()
+			addBackend(t, store, "b1")
+			ctx := context.Background()
+			if _, err := store.CreateVolume(ctx, state.Volume{VolumeID: "vol-1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.CreateSnapshot(ctx, "vol-1", "snap-001", nil); err != nil {
+				t.Fatal(err)
+			}
+			if tt.hasClones {
+				if _, err := store.CloneFromSnapshot(ctx, "snap-001", "clone-001", nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			req := httptest.NewRequest("DELETE", "/api/v1/snapshots/"+tt.snapshotID, nil)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d, body: %s", w.Code, tt.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleCloneFromSnapshot(t *testing.T) {
+	tests := []struct {
+		name       string
+		snapshotID string
+		body       map[string]any
+		wantStatus int
+	}{
+		{
+			name:       "success",
+			snapshotID: "snap-001",
+			body:       map[string]any{"volume_id": "clone-001", "metadata": map[string]string{"tenant": "t1"}},
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "snapshot not found",
+			snapshotID: "missing",
+			body:       map[string]any{"volume_id": "clone-002"},
+			wantStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, store := setupTestServer()
+			addBackend(t, store, "b1")
+			ctx := context.Background()
+			if _, err := store.CreateVolume(ctx, state.Volume{VolumeID: "vol-1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.CreateSnapshot(ctx, "vol-1", "snap-001", nil); err != nil {
+				t.Fatal(err)
+			}
+
+			body, _ := json.Marshal(tt.body)
+			req := httptest.NewRequest("POST", "/api/v1/snapshots/"+tt.snapshotID+"/clone", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d, body: %s", w.Code, tt.wantStatus, w.Body.String())
+			}
+
+			if tt.wantStatus == http.StatusCreated {
+				var vol state.Volume
+				if err := json.NewDecoder(w.Body).Decode(&vol); err != nil {
+					t.Fatal(err)
+				}
+				if vol.ParentSnapshotID != "snap-001" {
+					t.Errorf("parent_snapshot_id = %s, want snap-001", vol.ParentSnapshotID)
+				}
+				if vol.VolumeID != "clone-001" {
+					t.Errorf("volume_id = %s, want clone-001", vol.VolumeID)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleFlatten(t *testing.T) {
+	mux, store := setupTestServer()
+	addBackend(t, store, "b1")
+	ctx := context.Background()
+
+	// Set fast flatten for test
+	store.SetConfig(ctx, state.SimConfig{DefaultLatencyMs: 2, FlattenPerGBMs: 1})
+
+	if _, err := store.CreateVolume(ctx, state.Volume{VolumeID: "vol-1", BackendID: "b1", SizeGB: 10, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSnapshot(ctx, "vol-1", "snap-001", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CloneFromSnapshot(ctx, "snap-001", "clone-001", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start flatten
+	req := httptest.NewRequest("POST", "/api/v1/volumes/clone-001/flatten", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d, body: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var flattenResp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&flattenResp); err != nil {
+		t.Fatal(err)
+	}
+	opID, ok := flattenResp["operation_id"].(string)
+	if !ok || opID == "" {
+		t.Fatal("operation_id not returned")
+	}
+	if flattenResp["state"] != string(state.OperationRunning) {
+		t.Errorf("state = %v, want running", flattenResp["state"])
+	}
+
+	// Wait for completion and check operation
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		req = httptest.NewRequest("GET", "/api/v1/operations/"+opID, nil)
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("get operation status = %d", w.Code)
+		}
+
+		var op state.Operation
+		if err := json.NewDecoder(w.Body).Decode(&op); err != nil {
+			t.Fatal(err)
+		}
+		if op.State == state.OperationCompleted {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Verify volume after flatten
+	req = httptest.NewRequest("GET", "/api/v1/volumes/clone-001", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var vol state.Volume
+	if err := json.NewDecoder(w.Body).Decode(&vol); err != nil {
+		t.Fatal(err)
+	}
+	if vol.ParentSnapshotID != "" {
+		t.Errorf("parent_snapshot_id = %s, want empty", vol.ParentSnapshotID)
+	}
+	if vol.ConsumedGB != vol.SizeGB {
+		t.Errorf("consumed_gb = %d, want %d", vol.ConsumedGB, vol.SizeGB)
+	}
+}
+
+func TestHandleFlattenNoParent(t *testing.T) {
+	mux, store := setupTestServer()
+	addBackend(t, store, "b1")
+	if _, err := store.CreateVolume(context.Background(), state.Volume{VolumeID: "vol-1", BackendID: "b1", SizeGB: 100, ThinProvisioned: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/volumes/vol-1/flatten", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleGetOperationNotFound(t *testing.T) {
+	mux, _ := setupTestServer()
+
+	req := httptest.NewRequest("GET", "/api/v1/operations/missing", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 

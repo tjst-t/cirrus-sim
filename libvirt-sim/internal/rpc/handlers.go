@@ -42,6 +42,8 @@ func (h *Handler) HandleMessage(msg *Message) *Message {
 	h.logger.Debug("handling RPC", "procedure", msg.Header.Procedure, "serial", msg.Header.Serial)
 
 	switch msg.Header.Procedure {
+	case ProcAuthList:
+		return h.handleAuthList(msg)
 	case ProcConnectOpen:
 		return h.handleConnectOpen(msg)
 	case ProcConnectClose:
@@ -82,6 +84,8 @@ func (h *Handler) HandleMessage(msg *Message) *Message {
 		return h.handleDomainUndefineFlags(msg)
 	case ProcConnectGetVersion:
 		return h.handleConnectGetVersion(msg)
+	case ProcConnectGetLibVersion:
+		return h.handleConnectGetLibVersion(msg)
 	case ProcNodeGetFreeMemory:
 		return h.handleNodeGetFreeMemory(msg)
 	case ProcConnectGetAllDomainStats:
@@ -106,6 +110,22 @@ func (h *Handler) HandleMessage(msg *Message) *Message {
 		h.logger.Warn("unhandled procedure", "procedure", msg.Header.Procedure)
 		return h.errorReply(msg, VirErrInternalError, fmt.Sprintf("unhandled procedure %d", msg.Header.Procedure))
 	}
+}
+
+func (h *Handler) handleAuthList(msg *Message) *Message {
+	// Return auth types: [AUTH_NONE (0)]
+	enc := NewXDREncoder()
+	enc.WriteUint32(1)  // count of auth types
+	enc.WriteUint32(0)  // AUTH_NONE = 0
+	return NewReply(&msg.Header, StatusOK, enc.Bytes())
+}
+
+func (h *Handler) handleConnectGetLibVersion(msg *Message) *Message {
+	// Return libvirt version as uint64: major*1000000 + minor*1000 + micro
+	// Simulate libvirt 9.0.0
+	enc := NewXDREncoder()
+	enc.WriteUint64(9000000)
+	return NewReply(&msg.Header, StatusOK, enc.Bytes())
 }
 
 func (h *Handler) handleConnectOpen(msg *Message) *Message {
@@ -173,10 +193,12 @@ func (h *Handler) handleNodeGetInfo(msg *Message) *Message {
 	}
 
 	enc := NewXDREncoder()
-	// model: char[32] - fixed 32 bytes, padded with zeros
-	model := make([]byte, 32)
-	copy(model, host.CPUModel)
-	enc.WriteFixedOpaque(model, 32)
+	// model: [32]int8 - each char is an XDR int32 (go-libvirt convention)
+	modelBytes := make([]byte, 32)
+	copy(modelBytes, host.CPUModel)
+	for i := 0; i < 32; i++ {
+		enc.WriteInt32(int32(int8(modelBytes[i])))
+	}
 	// memory: uint64 (in KiB)
 	enc.WriteUint64(uint64(host.MemoryMB) * 1024)
 	// cpus: uint32

@@ -70,6 +70,10 @@ const (
 	ProcDomainMigrateConfirm3Params int32 = 348
 	// ProcDomainDefineXMLFlags is REMOTE_PROC_DOMAIN_DEFINE_XML_FLAGS.
 	ProcDomainDefineXMLFlags int32 = 350
+	// ProcAuthList is REMOTE_PROC_AUTH_LIST.
+	ProcAuthList int32 = 66
+	// ProcConnectGetLibVersion is REMOTE_PROC_CONNECT_GET_LIB_VERSION.
+	ProcConnectGetLibVersion int32 = 157
 )
 
 // Libvirt error codes.

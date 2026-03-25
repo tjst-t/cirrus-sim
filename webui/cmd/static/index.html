@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CIRRUS-SIM // Operations Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg-void:#0a0b0d;
+  --bg-panel:#101216;
+  --bg-card:#161920;
+  --bg-hover:#1c1f28;
+  --border:#1e2230;
+  --border-active:#2a3040;
+  --text-primary:#e0e4ec;
+  --text-secondary:#7a8194;
+  --text-dim:#4a4f60;
+  --accent-cyan:#00d4ff;
+  --accent-green:#22e87a;
+  --accent-amber:#ffb020;
+  --accent-red:#ff4060;
+  --accent-purple:#a78bfa;
+  --glow-cyan:0 0 20px rgba(0,212,255,0.15);
+  --glow-green:0 0 20px rgba(34,232,122,0.15);
+  --mono:'JetBrains Mono',monospace;
+  --sans:'DM Sans',sans-serif;
+  --radius:6px;
+}
+html{font-size:14px;-webkit-font-smoothing:antialiased}
+body{
+  background:var(--bg-void);
+  color:var(--text-primary);
+  font-family:var(--sans);
+  min-height:100vh;
+  overflow-x:hidden;
+}
+/* Scanline overlay */
+body::after{
+  content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);
+}
+/* ── HEADER ── */
+.header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 28px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,rgba(16,18,22,0.95),var(--bg-void));
+  position:sticky;top:0;z-index:100;
+  backdrop-filter:blur(12px);
+}
+.header-left{display:flex;align-items:center;gap:16px}
+.logo{
+  font-family:var(--mono);font-weight:700;font-size:1.15rem;
+  letter-spacing:0.08em;color:var(--accent-cyan);
+  text-shadow:var(--glow-cyan);
+}
+.logo span{color:var(--text-dim);font-weight:300}
+.header-tag{
+  font-family:var(--mono);font-size:0.7rem;
+  padding:3px 8px;border-radius:3px;
+  background:rgba(0,212,255,0.08);color:var(--accent-cyan);
+  border:1px solid rgba(0,212,255,0.15);
+  letter-spacing:0.06em;
+}
+.header-right{display:flex;align-items:center;gap:16px}
+.clock{font-family:var(--mono);font-size:0.8rem;color:var(--text-secondary)}
+.refresh-indicator{
+  width:8px;height:8px;border-radius:50%;background:var(--accent-green);
+  box-shadow:var(--glow-green);
+  animation:pulse 2s infinite;
+}
+@keyframes pulse{
+  0%,100%{opacity:1}50%{opacity:0.3}
+}
+/* ── STATUS BAR ── */
+.status-bar{
+  display:flex;gap:0;
+  border-bottom:1px solid var(--border);
+  overflow-x:auto;
+}
+.status-chip{
+  flex:1;min-width:120px;
+  display:flex;align-items:center;gap:8px;
+  padding:10px 16px;
+  border-right:1px solid var(--border);
+  font-family:var(--mono);font-size:0.72rem;
+  letter-spacing:0.04em;
+  transition:background 0.2s;
+  cursor:default;
+}
+.status-chip:hover{background:var(--bg-hover)}
+.status-chip:last-child{border-right:none}
+.status-dot{
+  width:7px;height:7px;border-radius:50%;flex-shrink:0;
+  transition:background 0.3s,box-shadow 0.3s;
+}
+.status-dot.up{background:var(--accent-green);box-shadow:var(--glow-green)}
+.status-dot.down{background:var(--accent-red);box-shadow:0 0 12px rgba(255,64,96,0.3)}
+.status-dot.unknown{background:var(--text-dim)}
+.status-chip-name{color:var(--text-secondary);text-transform:uppercase}
+/* ── GRID ── */
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(380px,1fr));
+  gap:1px;
+  background:var(--border);
+  margin:0;
+}
+/* ── CARD ── */
+.card{
+  background:var(--bg-panel);
+  padding:20px 24px 24px;
+  display:flex;flex-direction:column;gap:16px;
+  animation:cardIn 0.5s ease both;
+}
+@keyframes cardIn{
+  from{opacity:0;transform:translateY(8px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.card:nth-child(2){animation-delay:0.05s}
+.card:nth-child(3){animation-delay:0.1s}
+.card:nth-child(4){animation-delay:0.15s}
+.card:nth-child(5){animation-delay:0.2s}
+.card:nth-child(6){animation-delay:0.25s}
+.card-header{
+  display:flex;align-items:center;justify-content:space-between;
+}
+.card-title{
+  font-family:var(--mono);font-weight:600;font-size:0.78rem;
+  letter-spacing:0.1em;text-transform:uppercase;
+  color:var(--text-secondary);
+}
+.card-port{
+  font-family:var(--mono);font-size:0.68rem;
+  color:var(--text-dim);
+  padding:2px 6px;border-radius:3px;
+  background:rgba(255,255,255,0.03);
+  border:1px solid var(--border);
+}
+.card-icon{font-size:0.85rem;margin-right:6px}
+/* ── METRICS ── */
+.metrics{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));
+  gap:12px;
+}
+.metric{
+  display:flex;flex-direction:column;gap:2px;
+  padding:10px 12px;border-radius:var(--radius);
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  transition:border-color 0.2s,background 0.2s;
+}
+.metric:hover{border-color:var(--border-active);background:var(--bg-hover)}
+.metric-value{
+  font-family:var(--mono);font-weight:700;font-size:1.5rem;
+  letter-spacing:-0.02em;
+  color:var(--text-primary);
+  line-height:1;
+}
+.metric-value.cyan{color:var(--accent-cyan)}
+.metric-value.green{color:var(--accent-green)}
+.metric-value.amber{color:var(--accent-amber)}
+.metric-value.red{color:var(--accent-red)}
+.metric-value.purple{color:var(--accent-purple)}
+.metric-label{
+  font-family:var(--mono);font-size:0.65rem;
+  color:var(--text-dim);letter-spacing:0.06em;text-transform:uppercase;
+  margin-top:2px;
+}
+/* ── CAPACITY BAR ── */
+.capacity-section{display:flex;flex-direction:column;gap:8px}
+.capacity-row{display:flex;flex-direction:column;gap:4px}
+.capacity-header{
+  display:flex;justify-content:space-between;align-items:baseline;
+}
+.capacity-name{
+  font-family:var(--mono);font-size:0.72rem;color:var(--text-secondary);
+}
+.capacity-pct{
+  font-family:var(--mono);font-size:0.72rem;font-weight:600;
+}
+.capacity-track{
+  height:6px;border-radius:3px;
+  background:var(--bg-card);
+  overflow:hidden;position:relative;
+}
+.capacity-fill{
+  height:100%;border-radius:3px;
+  transition:width 0.6s cubic-bezier(0.22,1,0.36,1);
+  position:relative;
+}
+.capacity-fill::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent);
+  animation:shimmer 2s infinite;
+}
+@keyframes shimmer{
+  0%{transform:translateX(-100%)}100%{transform:translateX(100%)}
+}
+.capacity-fill.low{background:var(--accent-green)}
+.capacity-fill.medium{background:var(--accent-amber)}
+.capacity-fill.high{background:var(--accent-red)}
+/* ── TABLE ── */
+.mini-table{
+  font-family:var(--mono);font-size:0.72rem;
+  width:100%;border-collapse:collapse;
+}
+.mini-table th{
+  text-align:left;padding:6px 8px;
+  color:var(--text-dim);font-weight:500;
+  border-bottom:1px solid var(--border);
+  text-transform:uppercase;letter-spacing:0.06em;
+  font-size:0.65rem;
+}
+.mini-table td{
+  padding:6px 8px;
+  border-bottom:1px solid rgba(30,34,48,0.5);
+  color:var(--text-secondary);
+}
+.mini-table tr:hover td{color:var(--text-primary);background:rgba(255,255,255,0.01)}
+.badge{
+  display:inline-block;padding:1px 6px;border-radius:3px;
+  font-size:0.65rem;font-weight:500;letter-spacing:0.04em;
+}
+.badge-active{background:rgba(34,232,122,0.1);color:var(--accent-green);border:1px solid rgba(34,232,122,0.2)}
+.badge-draining{background:rgba(255,176,32,0.1);color:var(--accent-amber);border:1px solid rgba(255,176,32,0.2)}
+.badge-running{background:rgba(0,212,255,0.1);color:var(--accent-cyan);border:1px solid rgba(0,212,255,0.2)}
+.badge-down{background:rgba(255,64,96,0.1);color:var(--accent-red);border:1px solid rgba(255,64,96,0.2)}
+/* ── EMPTY STATE ── */
+.empty{
+  text-align:center;padding:24px;
+  font-family:var(--mono);font-size:0.75rem;
+  color:var(--text-dim);
+}
+.empty-icon{font-size:1.4rem;margin-bottom:6px;opacity:0.4}
+/* ── ERROR BANNER ── */
+.error-overlay{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(10,11,13,0.85);
+  backdrop-filter:blur(4px);
+  border-radius:var(--radius);
+  font-family:var(--mono);font-size:0.75rem;
+  color:var(--accent-red);
+  opacity:0;pointer-events:none;
+  transition:opacity 0.3s;
+}
+.card.offline .error-overlay{opacity:1;pointer-events:auto}
+.card{position:relative;overflow:hidden}
+/* ── FOOTER ── */
+.footer{
+  padding:12px 28px;
+  border-top:1px solid var(--border);
+  font-family:var(--mono);font-size:0.65rem;
+  color:var(--text-dim);
+  display:flex;justify-content:space-between;
+  letter-spacing:0.04em;
+}
+/* ── RESPONSIVE ── */
+@media(max-width:800px){
+  .grid{grid-template-columns:1fr}
+  .header{padding:12px 16px}
+  .card{padding:16px}
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="logo">CIRRUS<span>//</span>SIM</div>
+    <div class="header-tag">OPS DASHBOARD</div>
+  </div>
+  <div class="header-right">
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="refresh-indicator" id="refreshDot"></div>
+  </div>
+</div>
+
+<div class="status-bar" id="statusBar"></div>
+
+<div class="grid" id="grid">
+  <!-- Cards injected by JS -->
+</div>
+
+<div class="footer">
+  <span>CIRRUS-SIM DASHBOARD v1.0</span>
+  <span id="lastUpdate">Connecting...</span>
+</div>
+
+<script>
+const SIMS = [
+  { id:'libvirt-sim', label:'LIBVIRT-SIM', port:8100, icon:'\u2630' },
+  { id:'storage-sim', label:'STORAGE-SIM', port:8500, icon:'\u26C1' },
+  { id:'ovn-sim',     label:'OVN-SIM',     port:8200, icon:'\u26A1' },
+  { id:'awx-sim',     label:'AWX-SIM',     port:8300, icon:'\u2699' },
+  { id:'netbox-sim',  label:'NETBOX-SIM',  port:8400, icon:'\u2302' },
+  { id:'common',      label:'COMMON',      port:8000, icon:'\u2731' },
+];
+
+const state = {};
+SIMS.forEach(s => state[s.id] = { online: null, data: null });
+
+// ── Clock ──
+function updateClock() {
+  const d = new Date();
+  document.getElementById('clock').textContent =
+    d.toTimeString().slice(0,8) + ' UTC+' + (-(d.getTimezoneOffset()/60));
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Status Bar ──
+function renderStatusBar() {
+  const bar = document.getElementById('statusBar');
+  bar.innerHTML = SIMS.map(s => {
+    const st = state[s.id].online;
+    const cls = st === true ? 'up' : st === false ? 'down' : 'unknown';
+    return `<div class="status-chip">
+      <div class="status-dot ${cls}"></div>
+      <span class="status-chip-name">${s.label}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Fetch helpers ──
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function probeSimulator(sim) {
+  try {
+    let data = {};
+    if (sim.id === 'common') {
+      const [events, faults] = await Promise.all([
+        fetchJSON(`/proxy/common/api/v1/events?limit=1`),
+        fetchJSON(`/proxy/common/api/v1/faults`),
+      ]);
+      data = { events_total: events.total || 0, fault_rules: (faults||[]).length };
+    } else if (sim.id === 'libvirt-sim') {
+      const [stats, hosts] = await Promise.all([
+        fetchJSON(`/proxy/libvirt-sim/sim/stats`),
+        fetchJSON(`/proxy/libvirt-sim/sim/hosts`).catch(() => []),
+      ]);
+      data = { stats, hosts: Array.isArray(hosts) ? hosts : [] };
+    } else if (sim.id === 'storage-sim') {
+      const [stats, backends] = await Promise.all([
+        fetchJSON(`/proxy/storage-sim/sim/stats`),
+        fetchJSON(`/proxy/storage-sim/sim/backends`).catch(() => []),
+      ]);
+      data = { stats, backends: Array.isArray(backends) ? backends : [] };
+    } else if (sim.id === 'ovn-sim') {
+      data = await fetchJSON(`/proxy/ovn-sim/sim/stats`);
+    } else if (sim.id === 'awx-sim') {
+      data = await fetchJSON(`/proxy/awx-sim/sim/stats`);
+    } else if (sim.id === 'netbox-sim') {
+      data = await fetchJSON(`/proxy/netbox-sim/sim/stats`);
+    }
+    state[sim.id] = { online: true, data };
+  } catch {
+    state[sim.id] = { online: false, data: null };
+  }
+}
+
+// ── Render Cards ──
+function pctClass(pct) {
+  if (pct < 60) return 'low';
+  if (pct < 85) return 'medium';
+  return 'high';
+}
+
+function pctColor(pct) {
+  if (pct < 60) return 'green';
+  if (pct < 85) return 'amber';
+  return 'red';
+}
+
+function renderCard(sim) {
+  const s = state[sim.id];
+  const offline = !s.online;
+
+  let body = '';
+  if (offline) {
+    body = `<div class="empty"><div class="empty-icon">\u26A0</div>Service offline</div>`;
+  } else if (sim.id === 'libvirt-sim') {
+    body = renderLibvirt(s.data);
+  } else if (sim.id === 'storage-sim') {
+    body = renderStorage(s.data);
+  } else if (sim.id === 'ovn-sim') {
+    body = renderOVN(s.data);
+  } else if (sim.id === 'awx-sim') {
+    body = renderAWX(s.data);
+  } else if (sim.id === 'netbox-sim') {
+    body = renderNetbox(s.data);
+  } else if (sim.id === 'common') {
+    body = renderCommon(s.data);
+  }
+
+  return `<div class="card ${offline ? 'offline' : ''}">
+    <div class="card-header">
+      <div class="card-title"><span class="card-icon">${sim.icon}</span>${sim.label}</div>
+      <div class="card-port">:${sim.port}</div>
+    </div>
+    ${body}
+  </div>`;
+}
+
+function renderLibvirt(d) {
+  const st = d.stats || {};
+  const hosts = d.hosts || [];
+  let html = `<div class="metrics">
+    <div class="metric"><div class="metric-value cyan">${st.host_count||0}</div><div class="metric-label">Hosts</div></div>
+    <div class="metric"><div class="metric-value green">${st.total_domains||0}</div><div class="metric-label">Domains</div></div>
+    <div class="metric"><div class="metric-value purple">${st.running_domains||0}</div><div class="metric-label">Running</div></div>
+  </div>`;
+
+  if (hosts.length > 0) {
+    const rows = hosts.slice(0,6).map(h => {
+      const totalVcpu = (h.cpu_sockets||0)*(h.cores_per_socket||0)*(h.threads_per_core||0);
+      const memGB = ((h.memory_mb||0)/1024).toFixed(0);
+      return `<tr>
+        <td>${h.host_id||'?'}</td>
+        <td>${totalVcpu} vCPU</td>
+        <td>${memGB} GB</td>
+        <td>:${h.libvirt_port||'?'}</td>
+      </tr>`;
+    }).join('');
+    html += `<table class="mini-table">
+      <thead><tr><th>Host</th><th>CPU</th><th>Memory</th><th>Port</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+    if (hosts.length > 6) html += `<div class="empty">+${hosts.length-6} more hosts</div>`;
+  }
+  return html;
+}
+
+function renderStorage(d) {
+  const st = d.stats || {};
+  const backends = d.backends || [];
+  let html = `<div class="metrics">
+    <div class="metric"><div class="metric-value cyan">${st.backend_count||0}</div><div class="metric-label">Backends</div></div>
+    <div class="metric"><div class="metric-value green">${st.volume_count||0}</div><div class="metric-label">Volumes</div></div>
+    <div class="metric"><div class="metric-value amber">${st.export_count||0}</div><div class="metric-label">Exports</div></div>
+  </div>`;
+
+  if (backends.length > 0) {
+    html += `<div class="capacity-section">`;
+    backends.forEach(b => {
+      const total = b.total_capacity_gb || 1;
+      const used = b.used_capacity_gb || 0;
+      const alloc = b.allocated_capacity_gb || 0;
+      const pct = Math.round((alloc / total) * 100);
+      const cls = pctClass(pct);
+      const stBadge = b.state === 'active' ? 'badge-active' :
+                      b.state === 'draining' ? 'badge-draining' : 'badge-down';
+      html += `<div class="capacity-row">
+        <div class="capacity-header">
+          <span class="capacity-name">${b.backend_id} <span class="badge ${stBadge}">${b.state}</span></span>
+          <span class="capacity-pct" style="color:var(--accent-${pctColor(pct)})">${pct}%</span>
+        </div>
+        <div class="capacity-track">
+          <div class="capacity-fill ${cls}" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+
+function renderOVN(d) {
+  const clusters = d.clusters || {};
+  const clusterCount = d.cluster_count || 0;
+  let totalRows = 0;
+  const clusterEntries = Object.entries(clusters);
+  clusterEntries.forEach(([,v]) => {
+    if (v && v.total_rows != null) totalRows += v.total_rows;
+  });
+
+  let html = `<div class="metrics">
+    <div class="metric"><div class="metric-value cyan">${clusterCount}</div><div class="metric-label">Clusters</div></div>
+    <div class="metric"><div class="metric-value green">${totalRows}</div><div class="metric-label">Total Rows</div></div>
+  </div>`;
+
+  if (clusterEntries.length > 0) {
+    const rows = clusterEntries.map(([name, info]) => {
+      const tables = info.table_count || 0;
+      const rw = info.total_rows || 0;
+      return `<tr><td>${name}</td><td>${tables}</td><td>${rw}</td></tr>`;
+    }).join('');
+    html += `<table class="mini-table">
+      <thead><tr><th>Cluster</th><th>Tables</th><th>Rows</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+  return html;
+}
+
+function renderAWX(d) {
+  const total = (d.pending||0)+(d.running||0)+(d.successful||0)+(d.failed||0)+(d.canceled||0);
+  return `<div class="metrics">
+    <div class="metric"><div class="metric-value cyan">${total}</div><div class="metric-label">Total Jobs</div></div>
+    <div class="metric"><div class="metric-value green">${d.running||0}</div><div class="metric-label">Running</div></div>
+    <div class="metric"><div class="metric-value green">${d.successful||0}</div><div class="metric-label">Successful</div></div>
+    <div class="metric"><div class="metric-value red">${d.failed||0}</div><div class="metric-label">Failed</div></div>
+    <div class="metric"><div class="metric-value amber">${d.canceled||0}</div><div class="metric-label">Canceled</div></div>
+  </div>`;
+}
+
+function renderNetbox(d) {
+  return `<div class="metrics">
+    <div class="metric"><div class="metric-value cyan">${d.site_count||0}</div><div class="metric-label">Sites</div></div>
+    <div class="metric"><div class="metric-value green">${d.rack_count||0}</div><div class="metric-label">Racks</div></div>
+    <div class="metric"><div class="metric-value purple">${d.device_count||0}</div><div class="metric-label">Devices</div></div>
+    <div class="metric"><div class="metric-value amber">${d.location_count||0}</div><div class="metric-label">Locations</div></div>
+  </div>`;
+}
+
+function renderCommon(d) {
+  return `<div class="metrics">
+    <div class="metric"><div class="metric-value cyan">${d.events_total||0}</div><div class="metric-label">Events</div></div>
+    <div class="metric"><div class="metric-value amber">${d.fault_rules||0}</div><div class="metric-label">Fault Rules</div></div>
+  </div>`;
+}
+
+// ── Poll Loop ──
+async function poll() {
+  await Promise.all(SIMS.map(s => probeSimulator(s)));
+  renderStatusBar();
+  document.getElementById('grid').innerHTML = SIMS.map(s => renderCard(s)).join('');
+  const now = new Date();
+  document.getElementById('lastUpdate').textContent =
+    `Last update: ${now.toLocaleTimeString()}`;
+}
+
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>

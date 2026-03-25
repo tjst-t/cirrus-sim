@@ -1,6 +1,6 @@
 .PHONY: all build test lint clean setup
 
-SIMULATORS := libvirt-sim ovn-sim storage-sim awx-sim netbox-sim common load-gen
+SIMULATORS := libvirt-sim ovn-sim storage-sim awx-sim netbox-sim common load-gen webui
 
 all: lint test build
 

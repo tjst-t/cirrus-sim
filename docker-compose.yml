@@ -1,0 +1,63 @@
+version: "3.8"
+
+services:
+  libvirt-sim:
+    build: ./libvirt-sim
+    ports:
+      - "8100:8100"
+      - "16509-16609:16509-16609"
+    environment:
+      - LOG_LEVEL=info
+      - EVENT_LOG_ENDPOINT=http://common-api:8000
+
+  ovn-sim:
+    build: ./ovn-sim
+    ports:
+      - "8200:8200"
+      - "6641-6649:6641-6649"
+    environment:
+      - LOG_LEVEL=info
+      - EVENT_LOG_ENDPOINT=http://common-api:8000
+
+  storage-sim:
+    build: ./storage-sim
+    ports:
+      - "8500:8500"
+    environment:
+      - LOG_LEVEL=info
+      - EVENT_LOG_ENDPOINT=http://common-api:8000
+
+  awx-sim:
+    build: ./awx-sim
+    ports:
+      - "8300:8300"
+    environment:
+      - LOG_LEVEL=info
+      - EVENT_LOG_ENDPOINT=http://common-api:8000
+
+  netbox-sim:
+    build: ./netbox-sim
+    ports:
+      - "8400:8400"
+    environment:
+      - LOG_LEVEL=info
+      - EVENT_LOG_ENDPOINT=http://common-api:8000
+
+  common-api:
+    build: ./common
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=info
+    volumes:
+      - ./environments:/environments
+
+  load-gen:
+    build: ./load-gen
+    ports:
+      - "8600:8600"
+    environment:
+      - CIRRUS_ENDPOINT=http://cirrus:8080
+      - FAULT_INJECTION_ENDPOINT=http://common-api:8000
+    profiles:
+      - testing

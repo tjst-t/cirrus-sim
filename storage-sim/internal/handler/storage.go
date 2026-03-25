@@ -48,6 +48,11 @@ func (h *StorageHandler) RegisterRoutes(mux *http.ServeMux) {
 	// Flatten routes
 	mux.HandleFunc("POST /api/v1/volumes/{volume_id}/flatten", h.handleStartFlatten)
 	mux.HandleFunc("GET /api/v1/operations/{operation_id}", h.handleGetOperation)
+
+	// Migration routes
+	mux.HandleFunc("POST /api/v1/migrations", h.handleStartMigration)
+	mux.HandleFunc("GET /api/v1/migrations/{migration_id}", h.handleGetMigration)
+	mux.HandleFunc("DELETE /api/v1/migrations/{migration_id}", h.handleCancelMigration)
 }
 
 func (h *StorageHandler) handleBackendInfo(w http.ResponseWriter, r *http.Request) {
@@ -320,12 +325,60 @@ func (h *StorageHandler) handleGetOperation(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, op)
 }
 
+type startMigrationRequest struct {
+	VolumeID      string `json:"volume_id"`
+	DestBackendURL string `json:"dest_backend_url"`
+	DestBackendID string `json:"dest_backend_id"`
+}
+
+func (h *StorageHandler) handleStartMigration(w http.ResponseWriter, r *http.Request) {
+	var req startMigrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+
+	mig, err := h.store.StartMigration(r.Context(), req.VolumeID, req.DestBackendID)
+	if err != nil {
+		code := errorToHTTPStatus(err)
+		writeError(w, code, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, mig)
+}
+
+func (h *StorageHandler) handleGetMigration(w http.ResponseWriter, r *http.Request) {
+	migID := r.PathValue("migration_id")
+
+	mig, err := h.store.GetMigration(r.Context(), migID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, mig)
+}
+
+func (h *StorageHandler) handleCancelMigration(w http.ResponseWriter, r *http.Request) {
+	migID := r.PathValue("migration_id")
+
+	err := h.store.CancelMigration(r.Context(), migID)
+	if err != nil {
+		code := errorToHTTPStatus(err)
+		writeError(w, code, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // errorToHTTPStatus maps state errors to HTTP status codes.
 func errorToHTTPStatus(err error) int {
 	switch {
 	case containsErr(err, state.ErrVolumeNotFound), containsErr(err, state.ErrBackendNotFound):
 		return http.StatusNotFound
-	case containsErr(err, state.ErrSnapshotNotFound), containsErr(err, state.ErrOperationNotFound):
+	case containsErr(err, state.ErrSnapshotNotFound), containsErr(err, state.ErrOperationNotFound), containsErr(err, state.ErrMigrationNotFound):
 		return http.StatusNotFound
 	case containsErr(err, state.ErrVolumeInUse):
 		return http.StatusNotAcceptable // 406

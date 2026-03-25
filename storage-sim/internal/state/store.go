@@ -114,6 +114,7 @@ type ExportInfo struct {
 type SimConfig struct {
 	DefaultLatencyMs int `json:"default_latency_ms"`
 	FlattenPerGBMs   int `json:"flatten_per_gb_ms,omitempty"`
+	MigrationPerGBMs int `json:"migration_per_gb_ms,omitempty"`
 }
 
 // Stats holds overall simulation statistics.
@@ -130,6 +131,7 @@ type Store struct {
 	volumes    map[string]*Volume
 	snapshots  map[string]*Snapshot
 	operations map[string]*Operation
+	migrations map[string]*Migration
 	config     SimConfig
 	logger     *slog.Logger
 	opCounter  int
@@ -146,7 +148,8 @@ func NewStore(logger *slog.Logger) *Store {
 		volumes:    make(map[string]*Volume),
 		snapshots:  make(map[string]*Snapshot),
 		operations: make(map[string]*Operation),
-		config:     SimConfig{DefaultLatencyMs: 2, FlattenPerGBMs: 100},
+		migrations: make(map[string]*Migration),
+		config:     SimConfig{DefaultLatencyMs: 2, FlattenPerGBMs: 100, MigrationPerGBMs: 200},
 		logger:     logger,
 		timeNow:    time.Now,
 	}
@@ -443,7 +446,8 @@ func (s *Store) Reset(_ context.Context) {
 	s.volumes = make(map[string]*Volume)
 	s.snapshots = make(map[string]*Snapshot)
 	s.operations = make(map[string]*Operation)
-	s.config = SimConfig{DefaultLatencyMs: 2, FlattenPerGBMs: 100}
+	s.migrations = make(map[string]*Migration)
+	s.config = SimConfig{DefaultLatencyMs: 2, FlattenPerGBMs: 100, MigrationPerGBMs: 200}
 	s.opCounter = 0
 	s.logger.Info("state reset")
 }
@@ -728,6 +732,218 @@ func (s *Store) GetOperation(_ context.Context, opID string) (*Operation, error)
 	return &cp, nil
 }
 
+// Migration represents an in-progress storage migration.
+type Migration struct {
+	MigrationID      string         `json:"migration_id"`
+	VolumeID         string         `json:"volume_id"`
+	SourceBackendID  string         `json:"source_backend_id"`
+	DestBackendID    string         `json:"dest_backend_id"`
+	State            OperationState `json:"state"`
+	ProgressPercent  int            `json:"progress_percent"`
+	BytesTransferred int64          `json:"bytes_transferred"`
+	ElapsedMs        int64          `json:"elapsed_ms"`
+	EstimatedRemainingMs int64      `json:"estimated_remaining_ms"`
+	StartedAt        time.Time      `json:"started_at"`
+	cancelled        bool
+}
+
+// StartMigration begins an async storage migration for a volume.
+func (s *Store) StartMigration(ctx context.Context, volumeID, destBackendID string) (*Migration, error) {
+	s.mu.Lock()
+
+	v, ok := s.volumes[volumeID]
+	if !ok {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("migrate volume %q: %w", volumeID, ErrVolumeNotFound)
+	}
+	if len(v.Snapshots) > 0 {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("migrate volume %q: %w", volumeID, ErrVolumeHasSnapshots)
+	}
+	srcBackendID := v.BackendID
+
+	destBackend, ok := s.backends[destBackendID]
+	if !ok {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("migrate volume %q to %q: %w", volumeID, destBackendID, ErrBackendNotFound)
+	}
+
+	// Check destination capacity
+	if v.ThinProvisioned {
+		maxAlloc := int64(float64(destBackend.TotalCapacityGB) * destBackend.OverprovisionRatio)
+		if destBackend.AllocatedCapacityGB+v.SizeGB > maxAlloc {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("migrate volume %q: %w", volumeID, ErrInsufficientCapacity)
+		}
+	} else {
+		if destBackend.UsedCapacityGB+v.SizeGB > destBackend.TotalCapacityGB {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("migrate volume %q: %w", volumeID, ErrInsufficientCapacity)
+		}
+	}
+
+	s.opCounter++
+	migID := fmt.Sprintf("mig-%03d", s.opCounter)
+
+	migrationPerGBMs := s.config.MigrationPerGBMs
+	if migrationPerGBMs <= 0 {
+		migrationPerGBMs = 200
+	}
+	durationMs := int64(v.SizeGB) * int64(migrationPerGBMs)
+	totalBytes := v.SizeGB * 1024 * 1024 * 1024
+
+	mig := &Migration{
+		MigrationID:         migID,
+		VolumeID:            volumeID,
+		SourceBackendID:     srcBackendID,
+		DestBackendID:       destBackendID,
+		State:               "preparing",
+		ProgressPercent:     0,
+		BytesTransferred:    0,
+		ElapsedMs:           0,
+		EstimatedRemainingMs: durationMs,
+		StartedAt:           s.timeNow(),
+	}
+
+	if s.migrations == nil {
+		s.migrations = make(map[string]*Migration)
+	}
+	s.migrations[migID] = mig
+
+	sizeGB := v.SizeGB
+	thinProvisioned := v.ThinProvisioned
+	cp := *mig
+	s.mu.Unlock()
+
+	go s.runMigration(ctx, migID, volumeID, srcBackendID, destBackendID, sizeGB, thinProvisioned, totalBytes, durationMs)
+
+	return &cp, nil
+}
+
+// GetMigration returns a migration by ID.
+func (s *Store) GetMigration(_ context.Context, migID string) (*Migration, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	mig, ok := s.migrations[migID]
+	if !ok {
+		return nil, fmt.Errorf("get migration %q: %w", migID, ErrMigrationNotFound)
+	}
+	cp := *mig
+	return &cp, nil
+}
+
+// CancelMigration cancels an in-progress migration.
+func (s *Store) CancelMigration(_ context.Context, migID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mig, ok := s.migrations[migID]
+	if !ok {
+		return fmt.Errorf("cancel migration %q: %w", migID, ErrMigrationNotFound)
+	}
+	if mig.State != "preparing" && mig.State != "transferring" {
+		return fmt.Errorf("cancel migration %q: cannot cancel in %s state", migID, mig.State)
+	}
+
+	mig.cancelled = true
+	mig.State = "failed"
+	return nil
+}
+
+func (s *Store) runMigration(_ context.Context, migID, volumeID, srcBackendID, destBackendID string, sizeGB int64, thinProvisioned bool, totalBytes, durationMs int64) {
+	// Preparing phase (10% of time)
+	prepTime := time.Duration(durationMs/10) * time.Millisecond
+	time.Sleep(prepTime)
+
+	s.mu.Lock()
+	mig, ok := s.migrations[migID]
+	if !ok || mig.cancelled {
+		s.mu.Unlock()
+		return
+	}
+	mig.State = "transferring"
+	s.mu.Unlock()
+
+	// Transferring phase (80% of time in 10 steps)
+	steps := 10
+	stepDuration := time.Duration(durationMs*8/10/int64(steps)) * time.Millisecond
+
+	for i := 1; i <= steps; i++ {
+		time.Sleep(stepDuration)
+
+		s.mu.Lock()
+		mig, ok = s.migrations[migID]
+		if !ok || mig.cancelled {
+			s.mu.Unlock()
+			return
+		}
+		progress := int(float64(i) / float64(steps) * 90)
+		mig.ProgressPercent = progress
+		mig.BytesTransferred = totalBytes * int64(i) / int64(steps)
+		mig.ElapsedMs = time.Since(mig.StartedAt).Milliseconds()
+		remaining := durationMs - mig.ElapsedMs
+		if remaining < 0 {
+			remaining = 0
+		}
+		mig.EstimatedRemainingMs = remaining
+		s.mu.Unlock()
+	}
+
+	// Finishing phase
+	s.mu.Lock()
+	mig, ok = s.migrations[migID]
+	if !ok || mig.cancelled {
+		s.mu.Unlock()
+		return
+	}
+	mig.State = "finishing"
+	s.mu.Unlock()
+
+	finishTime := time.Duration(durationMs/10) * time.Millisecond
+	time.Sleep(finishTime)
+
+	// Complete: move volume from source to destination
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mig, ok = s.migrations[migID]
+	if !ok || mig.cancelled {
+		return
+	}
+
+	v, ok := s.volumes[volumeID]
+	if !ok {
+		mig.State = "failed"
+		return
+	}
+
+	// Remove capacity from source backend
+	if srcB, ok := s.backends[srcBackendID]; ok {
+		srcB.AllocatedCapacityGB -= sizeGB
+		if !thinProvisioned {
+			srcB.UsedCapacityGB -= sizeGB
+		}
+	}
+
+	// Add capacity to destination backend
+	if destB, ok := s.backends[destBackendID]; ok {
+		destB.AllocatedCapacityGB += sizeGB
+		if !thinProvisioned {
+			destB.UsedCapacityGB += sizeGB
+		}
+	}
+
+	v.BackendID = destBackendID
+
+	mig.State = "completed"
+	mig.ProgressPercent = 100
+	mig.BytesTransferred = totalBytes
+	mig.ElapsedMs = time.Since(mig.StartedAt).Milliseconds()
+	mig.EstimatedRemainingMs = 0
+	s.logger.Info("migration completed", "migration_id", migID, "volume_id", volumeID)
+}
+
 // Sentinel errors for the state package.
 var (
 	ErrEmptyBackendID       = fmt.Errorf("backend_id is required")
@@ -749,4 +965,5 @@ var (
 	ErrSnapshotHasClones    = fmt.Errorf("snapshot has active clones")
 	ErrVolumeNoParent       = fmt.Errorf("volume has no parent snapshot")
 	ErrOperationNotFound    = fmt.Errorf("operation not found")
+	ErrMigrationNotFound    = fmt.Errorf("migration not found")
 )

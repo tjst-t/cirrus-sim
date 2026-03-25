@@ -153,6 +153,57 @@ func SchemaJSON() map[string]interface{} {
 	}
 }
 
+// OVNICTables is the simplified OVN IC Northbound schema for inter-cluster connectivity.
+var OVNICTables = map[string]TableSchema{
+	"Transit_Switch": {
+		Columns: map[string]ColumnSchema{
+			"name":         {Type: "string"},
+			"external_ids": {Type: "map", KeyType: "string", ValueType: "string"},
+		},
+	},
+	"Availability_Zone": {
+		Columns: map[string]ColumnSchema{
+			"name":         {Type: "string"},
+			"external_ids": {Type: "map", KeyType: "string", ValueType: "string"},
+		},
+	},
+	"Route": {
+		Columns: map[string]ColumnSchema{
+			"ip_prefix":         {Type: "string"},
+			"nexthop":           {Type: "string"},
+			"availability_zone": {Type: "uuid", RefTable: "Availability_Zone", Optional: true},
+			"transit_switch":    {Type: "uuid", RefTable: "Transit_Switch", Optional: true},
+			"external_ids":      {Type: "map", KeyType: "string", ValueType: "string"},
+		},
+	},
+	"Port_Binding": {
+		Columns: map[string]ColumnSchema{
+			"logical_port":      {Type: "string"},
+			"transit_switch":    {Type: "uuid", RefTable: "Transit_Switch", Optional: true},
+			"availability_zone": {Type: "uuid", RefTable: "Availability_Zone", Optional: true},
+			"address":           {Type: "set", KeyType: "string"},
+			"external_ids":      {Type: "map", KeyType: "string", ValueType: "string"},
+		},
+	},
+}
+
+// ICSchemaJSON returns the OVN IC Northbound schema as a JSON-serializable object.
+func ICSchemaJSON() interface{} {
+	tables := make(map[string]interface{})
+	for tName, tSchema := range OVNICTables {
+		cols := make(map[string]interface{})
+		for cName, cSchema := range tSchema.Columns {
+			cols[cName] = map[string]interface{}{"type": buildColumnType(cSchema)}
+		}
+		tables[tName] = map[string]interface{}{"columns": cols}
+	}
+	return map[string]interface{}{
+		"name":    "OVN_IC_Northbound",
+		"version": "1.0.0",
+		"tables":  tables,
+	}
+}
+
 func buildColumnType(cs ColumnSchema) interface{} {
 	switch cs.Type {
 	case "string":

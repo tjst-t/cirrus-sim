@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/tjst-t/cirrus-sim/common/internal/handler"
+	"github.com/tjst-t/cirrus-sim/common/pkg/datagen"
 	"github.com/tjst-t/cirrus-sim/common/pkg/eventlog"
 	"github.com/tjst-t/cirrus-sim/common/pkg/fault"
+	"github.com/tjst-t/cirrus-sim/common/pkg/snapshot"
 )
 
 func main() {
@@ -27,12 +29,18 @@ func main() {
 
 	el := eventlog.New()
 	fe := fault.New()
+	gen := datagen.New()
+	snapMgr := snapshot.NewManager()
 
 	mux := http.NewServeMux()
 	eventsHandler := handler.NewEventsHandler(el)
 	eventsHandler.Register(mux)
 	faultHandler := handler.NewFaultHandler(fe)
 	faultHandler.RegisterRoutes(mux)
+	datagenHandler := handler.NewDatagenHandler(gen)
+	datagenHandler.RegisterRoutes(mux)
+	snapshotHandler := handler.NewSnapshotHandler(snapMgr)
+	snapshotHandler.RegisterRoutes(mux)
 
 	srv := &http.Server{
 		Addr:    ":" + port,

@@ -33,6 +33,7 @@ func (m *Management) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sim/clusters", m.listClusters)
 	mux.HandleFunc("POST /sim/ports/{uuid}/up", m.setPortUp)
 	mux.HandleFunc("POST /sim/ports/{uuid}/down", m.setPortDown)
+	mux.HandleFunc("POST /sim/ic/connections", m.createICConnection)
 	mux.HandleFunc("GET /sim/stats", m.getStats)
 	mux.HandleFunc("POST /sim/reset", m.reset)
 }
@@ -103,6 +104,40 @@ func (m *Management) setPortDown(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "down", "uuid": uuid})
+}
+
+type createICConnectionRequest struct {
+	ICClusterID string   `json:"ic_cluster_id"`
+	Port        int      `json:"port"`
+	Connects    []string `json:"connects"`
+}
+
+func (m *Management) createICConnection(w http.ResponseWriter, r *http.Request) {
+	var req createICConnectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+
+	if req.ICClusterID == "" {
+		writeError(w, http.StatusBadRequest, "ic_cluster_id is required")
+		return
+	}
+	if req.Port == 0 {
+		writeError(w, http.StatusBadRequest, "port is required")
+		return
+	}
+
+	cluster, err := m.manager.CreateICCluster(m.ctx, req.ICClusterID, req.Port, req.Connects)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, state.ClusterInfo{
+		ID:   cluster.ID,
+		Port: cluster.Port,
+	})
 }
 
 func (m *Management) getStats(w http.ResponseWriter, _ *http.Request) {

@@ -148,6 +148,49 @@ func (m *Manager) Stats() map[string]interface{} {
 	}
 }
 
+// ICConnection represents an OVN IC connection configuration.
+type ICConnection struct {
+	ICClusterID string   `json:"ic_cluster_id"`
+	Connects    []string `json:"connects"`
+	Port        int      `json:"port"`
+}
+
+// CreateICCluster creates an OVN IC Northbound cluster with IC schema.
+func (m *Manager) CreateICCluster(ctx context.Context, id string, port int, connects []string) (*Cluster, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.clusters[id]; exists {
+		return nil, fmt.Errorf("create IC cluster: cluster %q already exists", id)
+	}
+
+	store := ovsdb.NewStore(ovsdb.OVNICTables)
+	server := ovsdb.NewServer(store, m.logger.With("cluster", id, "type", "ic"))
+
+	addr := fmt.Sprintf(":%d", port)
+	if err := server.Listen(ctx, id, addr); err != nil {
+		return nil, fmt.Errorf("create IC cluster: %w", err)
+	}
+
+	cluster := &Cluster{
+		ID:     id,
+		Port:   port,
+		Store:  store,
+		Server: server,
+	}
+	m.clusters[id] = cluster
+
+	// Create Availability_Zone entries for connected clusters
+	for _, clusterID := range connects {
+		if _, err := store.Insert("Availability_Zone", ovsdb.Row{"name": clusterID}); err != nil {
+			m.logger.Warn("failed to create AZ", "cluster", clusterID, "error", err)
+		}
+	}
+
+	m.logger.Info("IC cluster created", "cluster_id", id, "port", port, "connects", connects)
+	return cluster, nil
+}
+
 // Reset stops all clusters and clears all state.
 func (m *Manager) Reset() {
 	m.mu.Lock()

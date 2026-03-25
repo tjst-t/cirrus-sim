@@ -88,6 +88,10 @@ func (h *Handler) HandleMessage(msg *Message) *Message {
 		return h.handleConnectGetLibVersion(msg)
 	case ProcNodeGetFreeMemory:
 		return h.handleNodeGetFreeMemory(msg)
+	case ProcNodeGetCPUStats:
+		return h.handleNodeGetCPUStats(msg)
+	case ProcNodeGetMemoryStats:
+		return h.handleNodeGetMemoryStats(msg)
 	case ProcConnectGetAllDomainStats:
 		return h.handleGetAllDomainStats(msg)
 	case ProcConnectDomainEventRegisterAny:
@@ -493,6 +497,67 @@ func (h *Handler) handleNodeGetFreeMemory(msg *Message) *Message {
 
 	enc := NewXDREncoder()
 	enc.WriteUint64(uint64(freeMemKiB) * 1024) // Return in bytes
+	return NewReply(&msg.Header, StatusOK, enc.Bytes())
+}
+
+func (h *Handler) handleNodeGetCPUStats(msg *Message) *Message {
+	// Request: int32 cpuNum, int32 nparams, uint32 flags
+	// Response: array of {field: string, value: uint64}, int32 nparams
+	host, err := h.store.GetHost(h.hostID)
+	if err != nil {
+		return h.errorReply(msg, VirErrInternalError, err.Error())
+	}
+
+	totalCPUs := host.TotalVCPUs()
+	usedCPUs := host.UsedVCPUs()
+
+	enc := NewXDREncoder()
+	// params array: 4 stats
+	enc.WriteUint32(4)
+	// kernel
+	enc.WriteString("kernel")
+	enc.WriteUint64(0)
+	// user
+	enc.WriteString("user")
+	enc.WriteUint64(uint64(usedCPUs) * 1000000000)
+	// idle
+	enc.WriteString("idle")
+	enc.WriteUint64(uint64(totalCPUs-usedCPUs) * 1000000000)
+	// iowait
+	enc.WriteString("iowait")
+	enc.WriteUint64(0)
+	// nparams
+	enc.WriteInt32(4)
+
+	return NewReply(&msg.Header, StatusOK, enc.Bytes())
+}
+
+func (h *Handler) handleNodeGetMemoryStats(msg *Message) *Message {
+	// Request: int32 nparams, int32 cellNum, uint32 flags
+	// Response: array of {field: string, value: uint64}, int32 nparams
+	host, err := h.store.GetHost(h.hostID)
+	if err != nil {
+		return h.errorReply(msg, VirErrInternalError, err.Error())
+	}
+
+	totalKB := uint64(host.MemoryMB) * 1024
+	usedKB := uint64(host.UsedMemoryMB()) * 1024
+	freeKB := totalKB - usedKB
+
+	enc := NewXDREncoder()
+	// params array: 4 stats
+	enc.WriteUint32(4)
+	enc.WriteString("total")
+	enc.WriteUint64(totalKB)
+	enc.WriteString("free")
+	enc.WriteUint64(freeKB)
+	enc.WriteString("buffers")
+	enc.WriteUint64(0)
+	enc.WriteString("cached")
+	enc.WriteUint64(0)
+	// nparams
+	enc.WriteInt32(4)
+
 	return NewReply(&msg.Header, StatusOK, enc.Bytes())
 }
 

@@ -80,7 +80,7 @@ func TestEventRegistrationAndDeregistration(t *testing.T) {
 		t.Errorf("callback ID=%d, want %d", callbacks[0], cbID)
 	}
 
-	// Deregister
+	// Deregister by eventID (matching go-libvirt protocol)
 	deregMsg := &Message{
 		Header: Header{
 			Program:   RemoteProgram,
@@ -92,7 +92,7 @@ func TestEventRegistrationAndDeregistration(t *testing.T) {
 		},
 		Body: func() []byte {
 			enc := NewXDREncoder()
-			enc.WriteInt32(cbID)
+			enc.WriteInt32(VirDomainEventIDLifecycle) // eventID, not callbackID
 			return enc.Bytes()
 		}(),
 	}

@@ -405,20 +405,20 @@ func (h *Handler) handleDomainEventRegisterAny(msg *Message) *Message {
 func (h *Handler) handleDomainEventDeregisterAny(msg *Message) *Message {
 	dec := NewXDRDecoder(msg.Body)
 
-	// callbackID: int32
-	callbackID, err := dec.ReadInt32()
+	// eventID: int32 (go-libvirt sends eventID, not callbackID)
+	eventID, err := dec.ReadInt32()
 	if err != nil {
-		return h.errorReply(msg, VirErrInternalError, fmt.Sprintf("read callbackID: %v", err))
+		return h.errorReply(msg, VirErrInternalError, fmt.Sprintf("read eventID: %v", err))
 	}
 
 	if h.clientEvents == nil {
 		return h.errorReply(msg, VirErrInternalError, "event system not initialized")
 	}
 
-	if !h.clientEvents.Deregister(callbackID) {
-		return h.errorReply(msg, VirErrInternalError, fmt.Sprintf("callback %d not found", callbackID))
+	if !h.clientEvents.DeregisterByEventID(eventID) {
+		return h.errorReply(msg, VirErrInternalError, fmt.Sprintf("event %d not registered", eventID))
 	}
 
-	h.logger.Info("domain event deregistered", "callback_id", callbackID)
+	h.logger.Info("domain event deregistered", "event_id", eventID)
 	return NewReply(&msg.Header, StatusOK, nil)
 }

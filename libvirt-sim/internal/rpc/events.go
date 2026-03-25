@@ -102,6 +102,21 @@ func (ce *ClientEvents) Deregister(callbackID int32) bool {
 	return true
 }
 
+// DeregisterByEventID removes all callbacks for the given event type. Returns false if none found.
+func (ce *ClientEvents) DeregisterByEventID(eventID int32) bool {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+
+	found := false
+	for cbID, cb := range ce.callbacks {
+		if cb.EventID == eventID {
+			delete(ce.callbacks, cbID)
+			found = true
+		}
+	}
+	return found
+}
+
 // GetCallbacksForEvent returns all callback IDs registered for the given event type.
 func (ce *ClientEvents) GetCallbacksForEvent(eventID int32) []int32 {
 	ce.mu.RLock()

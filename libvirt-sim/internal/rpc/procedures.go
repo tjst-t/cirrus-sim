@@ -49,25 +49,25 @@ const (
 	// ProcDomainListAllDomains is REMOTE_PROC_CONNECT_LIST_ALL_DOMAINS.
 	ProcDomainListAllDomains int32 = 273
 	// ProcConnectDomainEventRegisterAny is REMOTE_PROC_CONNECT_DOMAIN_EVENT_REGISTER_ANY.
-	ProcConnectDomainEventRegisterAny int32 = 171
+	ProcConnectDomainEventRegisterAny int32 = 167
 	// ProcConnectDomainEventDeregisterAny is REMOTE_PROC_CONNECT_DOMAIN_EVENT_DEREGISTER_ANY.
-	ProcConnectDomainEventDeregisterAny int32 = 172
+	ProcConnectDomainEventDeregisterAny int32 = 168
+	// ProcDomainMigrateSetMaxSpeed is REMOTE_PROC_DOMAIN_MIGRATE_SET_MAX_SPEED.
+	ProcDomainMigrateSetMaxSpeed int32 = 207
 	// ProcDomainMigrateGetMaxSpeed is REMOTE_PROC_DOMAIN_MIGRATE_GET_MAX_SPEED.
 	ProcDomainMigrateGetMaxSpeed int32 = 242
-	// ProcDomainMigrateSetMaxSpeed is REMOTE_PROC_DOMAIN_MIGRATE_SET_MAX_SPEED.
-	ProcDomainMigrateSetMaxSpeed int32 = 243
 	// ProcDomainEventLifecycle is REMOTE_PROC_DOMAIN_EVENT_LIFECYCLE.
-	ProcDomainEventLifecycle int32 = 314
+	ProcDomainEventLifecycle int32 = 107
+	// ProcDomainMigratePrepare3Params is REMOTE_PROC_DOMAIN_MIGRATE_PREPARE3_PARAMS.
+	ProcDomainMigratePrepare3Params int32 = 303
+	// ProcDomainMigratePerform3Params is REMOTE_PROC_DOMAIN_MIGRATE_PERFORM3_PARAMS.
+	ProcDomainMigratePerform3Params int32 = 305
+	// ProcDomainMigrateFinish3Params is REMOTE_PROC_DOMAIN_MIGRATE_FINISH3_PARAMS.
+	ProcDomainMigrateFinish3Params int32 = 306
+	// ProcDomainMigrateConfirm3Params is REMOTE_PROC_DOMAIN_MIGRATE_CONFIRM3_PARAMS.
+	ProcDomainMigrateConfirm3Params int32 = 307
 	// ProcConnectGetAllDomainStats is REMOTE_PROC_CONNECT_GET_ALL_DOMAIN_STATS.
 	ProcConnectGetAllDomainStats int32 = 344
-	// ProcDomainMigratePrepare3Params is REMOTE_PROC_DOMAIN_MIGRATE_PREPARE3_PARAMS.
-	ProcDomainMigratePrepare3Params int32 = 345
-	// ProcDomainMigratePerform3Params is REMOTE_PROC_DOMAIN_MIGRATE_PERFORM3_PARAMS.
-	ProcDomainMigratePerform3Params int32 = 346
-	// ProcDomainMigrateFinish3Params is REMOTE_PROC_DOMAIN_MIGRATE_FINISH3_PARAMS.
-	ProcDomainMigrateFinish3Params int32 = 347
-	// ProcDomainMigrateConfirm3Params is REMOTE_PROC_DOMAIN_MIGRATE_CONFIRM3_PARAMS.
-	ProcDomainMigrateConfirm3Params int32 = 348
 	// ProcDomainDefineXMLFlags is REMOTE_PROC_DOMAIN_DEFINE_XML_FLAGS.
 	ProcDomainDefineXMLFlags int32 = 350
 	// ProcAuthList is REMOTE_PROC_AUTH_LIST.

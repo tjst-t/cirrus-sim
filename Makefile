@@ -83,7 +83,7 @@ serve: build-unified
 	fi
 	@portman env \
 	  --name common \
-	  --name dashboard \
+	  --name dashboard --expose \
 	  --name libvirt-sim \
 	  --name ovn-sim \
 	  --name awx-sim \

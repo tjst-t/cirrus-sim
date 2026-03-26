@@ -15,6 +15,7 @@ import (
 // Server is the netbox-sim server instance.
 type Server struct {
 	httpServer *http.Server
+	store      *state.Store
 	logger     *slog.Logger
 }
 
@@ -36,8 +37,29 @@ func New(port string, logger *slog.Logger) *Server {
 			Handler:           mux,
 			ReadHeaderTimeout: 10 * time.Second,
 		},
+		store:  store,
 		logger: logger,
 	}
+}
+
+// SeedSite adds a site and returns its ID.
+func (s *Server) SeedSite(name string) int {
+	return s.store.AddSite(name, "active", nil, nil)
+}
+
+// SeedLocation adds a location under a site with an optional parent. Returns its ID.
+func (s *Server) SeedLocation(name string, siteID, parentID int, customFields map[string]string) int {
+	return s.store.AddLocation(name, siteID, parentID, customFields)
+}
+
+// SeedRack adds a rack under a location. Returns its ID.
+func (s *Server) SeedRack(name string, siteID, locationID int, customFields map[string]string) int {
+	return s.store.AddRack(name, siteID, locationID, "active", customFields)
+}
+
+// SeedDevice adds a device in a rack.
+func (s *Server) SeedDevice(name, role string, siteID, rackID, position int, customFields map[string]string) {
+	s.store.AddDevice(name, role, siteID, rackID, position, "active", customFields)
 }
 
 // Start starts the server in a goroutine.

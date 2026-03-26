@@ -18,11 +18,14 @@ type Site struct {
 	CustomFields map[string]string `json:"custom_fields"`
 }
 
-// Location represents a row or location within a site.
+// Location represents a hierarchical location within a site (floor, hall, rack row, etc.).
+// Locations can be nested via ParentID to form a tree: Site → Floor → Rack Row.
 type Location struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	SiteID int    `json:"site_id"`
+	ID           int               `json:"id"`
+	Name         string            `json:"name"`
+	SiteID       int               `json:"site_id"`
+	ParentID     int               `json:"parent_id,omitempty"`
+	CustomFields map[string]string `json:"custom_fields"`
 }
 
 // Rack represents a NetBox rack.
@@ -102,17 +105,24 @@ func (s *Store) AddSite(name, status string, region *NamedRef, customFields map[
 }
 
 // AddLocation adds a location and returns its assigned ID.
-func (s *Store) AddLocation(name string, siteID int) int {
+// parentID of 0 means a top-level location under the site.
+func (s *Store) AddLocation(name string, siteID, parentID int, customFields map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	id := s.nextLocationID
 	s.nextLocationID++
 
+	if customFields == nil {
+		customFields = make(map[string]string)
+	}
+
 	s.locations[id] = &Location{
-		ID:     id,
-		Name:   name,
-		SiteID: siteID,
+		ID:           id,
+		Name:         name,
+		SiteID:       siteID,
+		ParentID:     parentID,
+		CustomFields: customFields,
 	}
 	return id
 }
@@ -186,6 +196,26 @@ func (s *Store) ListSites() []*Site {
 	return sites
 }
 
+// ListLocations returns locations, optionally filtered by siteID and/or parentID.
+// If siteID is 0, no site filter is applied.
+// If parentID is -1, no parent filter is applied. If 0, returns top-level locations only.
+func (s *Store) ListLocations(siteID, parentID int) []*Location {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	locs := make([]*Location, 0, len(s.locations))
+	for _, loc := range s.locations {
+		if siteID != 0 && loc.SiteID != siteID {
+			continue
+		}
+		if parentID != -1 && loc.ParentID != parentID {
+			continue
+		}
+		locs = append(locs, loc)
+	}
+	return locs
+}
+
 // ListRacks returns all racks, optionally filtered by siteID.
 // If siteID is 0, all racks are returned.
 func (s *Store) ListRacks(siteID int) []*Rack {
@@ -241,6 +271,29 @@ func (s *Store) GetRack(id int) *Rack {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.racks[id]
+}
+
+// LocationAncestors returns the chain of parent locations from the given location up to the site.
+// The result is ordered from the given location to the root (site-level).
+func (s *Store) LocationAncestors(locationID int) []*Location {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var chain []*Location
+	seen := make(map[int]bool)
+	for id := locationID; id != 0; {
+		if seen[id] {
+			break // prevent infinite loop
+		}
+		seen[id] = true
+		loc, ok := s.locations[id]
+		if !ok {
+			break
+		}
+		chain = append(chain, loc)
+		id = loc.ParentID
+	}
+	return chain
 }
 
 // Stats holds counts for all entity types.

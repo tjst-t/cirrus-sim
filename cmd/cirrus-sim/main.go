@@ -80,6 +80,7 @@ func main() {
 	libvirtSim := libvirtsim.New(*libvirtPort, logger.With("sim", "libvirt-sim"))
 	ovnSim := ovnsim.New(*ovnPort, logger.With("sim", "ovn-sim"))
 	storageSim := storagesim.New(*storagePort, logger.With("sim", "storage-sim"))
+	netboxSim := netboxsim.New(*netboxPort, logger.With("sim", "netbox-sim"))
 
 	sims := []struct {
 		name string
@@ -89,7 +90,7 @@ func main() {
 		{"libvirt-sim", libvirtSim},
 		{"ovn-sim", ovnSim},
 		{"awx-sim", awxsim.New(*awxPort, logger.With("sim", "awx-sim"))},
-		{"netbox-sim", netboxsim.New(*netboxPort, logger.With("sim", "netbox-sim"))},
+		{"netbox-sim", netboxSim},
 		{"storage-sim", storageSim},
 		{"dashboard", webui.New(*dashboardPort, endpoints, logger.With("sim", "dashboard"))},
 	}
@@ -111,7 +112,7 @@ func main() {
 	// Seed environment if specified
 	if *envFile != "" {
 		ctx := context.Background()
-		if err := seedFromEnvFile(ctx, *envFile, libvirtSim, ovnSim, storageSim, logger); err != nil {
+		if err := seedFromEnvFile(ctx, *envFile, libvirtSim, ovnSim, storageSim, netboxSim, logger); err != nil {
 			logger.Error("environment seeding failed", "file", *envFile, "error", err)
 			os.Exit(1)
 		}

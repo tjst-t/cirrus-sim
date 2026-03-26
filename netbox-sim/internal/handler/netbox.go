@@ -23,6 +23,7 @@ func NewHandler(store *state.Store) *Handler {
 // RegisterRoutes registers all NetBox API routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dcim/sites/", h.listSites)
+	mux.HandleFunc("GET /api/dcim/locations/", h.listLocations)
 	mux.HandleFunc("GET /api/dcim/racks/", h.listRacks)
 	mux.HandleFunc("GET /api/dcim/devices/", h.listDevices)
 	mux.HandleFunc("POST /sim/bulk-load", h.bulkLoad)
@@ -35,6 +36,18 @@ func (h *Handler) listSites(w http.ResponseWriter, _ *http.Request) {
 	results := make([]siteResponse, 0, len(sites))
 	for _, s := range sites {
 		results = append(results, toSiteResponse(s))
+	}
+	writeJSON(w, http.StatusOK, listResponse{Count: len(results), Results: results})
+}
+
+func (h *Handler) listLocations(w http.ResponseWriter, r *http.Request) {
+	siteID := queryInt(r, "site_id", 0)
+	parentID := queryInt(r, "parent_id", -1)
+
+	locs := h.store.ListLocations(siteID, parentID)
+	results := make([]locationResponse, 0, len(locs))
+	for _, loc := range locs {
+		results = append(results, h.toLocationResponse(loc))
 	}
 	writeJSON(w, http.StatusOK, listResponse{Count: len(results), Results: results})
 }
@@ -88,8 +101,10 @@ type bulkSite struct {
 }
 
 type bulkLocation struct {
-	Name  string     `json:"name"`
-	Racks []bulkRack `json:"racks"`
+	Name         string         `json:"name"`
+	PowerFeed    string         `json:"power_feed,omitempty"`
+	Locations    []bulkLocation `json:"locations,omitempty"` // nested child locations
+	Racks        []bulkRack     `json:"racks,omitempty"`
 }
 
 type bulkRack struct {
@@ -101,6 +116,7 @@ type bulkRack struct {
 
 type bulkDevice struct {
 	Name         string `json:"name"`
+	DeviceRole   string `json:"device_role,omitempty"`
 	Position     int    `json:"position"`
 	CirrusHostID string `json:"cirrus_host_id"`
 }
@@ -115,29 +131,49 @@ func (h *Handler) bulkLoad(w http.ResponseWriter, r *http.Request) {
 	for _, site := range req.Sites {
 		siteID := h.store.AddSite(site.Name, "active", nil, nil)
 		for _, loc := range site.Locations {
-			locID := h.store.AddLocation(loc.Name, siteID)
-			for _, rack := range loc.Racks {
-				cf := map[string]string{}
-				if rack.TorSwitch != "" {
-					cf["tor_switch"] = rack.TorSwitch
-				}
-				if rack.PowerCircuit != "" {
-					cf["power_circuit"] = rack.PowerCircuit
-				}
-				rackID := h.store.AddRack(rack.Name, siteID, locID, "active", cf)
-				for _, dev := range rack.Devices {
-					dcf := map[string]string{}
-					if dev.CirrusHostID != "" {
-						dcf["cirrus_host_id"] = dev.CirrusHostID
-					}
-					h.store.AddDevice(dev.Name, "server", siteID, rackID, dev.Position, "active", dcf)
-				}
-			}
+			h.loadLocation(siteID, 0, loc)
 		}
 	}
 
 	stats := h.store.GetStats()
 	writeJSON(w, http.StatusCreated, stats)
+}
+
+// loadLocation recursively loads a location and its children.
+func (h *Handler) loadLocation(siteID, parentID int, loc bulkLocation) {
+	locCF := map[string]string{}
+	if loc.PowerFeed != "" {
+		locCF["power_feed"] = loc.PowerFeed
+	}
+	locID := h.store.AddLocation(loc.Name, siteID, parentID, locCF)
+
+	// Recursively load child locations
+	for _, child := range loc.Locations {
+		h.loadLocation(siteID, locID, child)
+	}
+
+	// Load racks under this location
+	for _, rack := range loc.Racks {
+		cf := map[string]string{}
+		if rack.TorSwitch != "" {
+			cf["tor_switch"] = rack.TorSwitch
+		}
+		if rack.PowerCircuit != "" {
+			cf["power_circuit"] = rack.PowerCircuit
+		}
+		rackID := h.store.AddRack(rack.Name, siteID, locID, "active", cf)
+		for _, dev := range rack.Devices {
+			dcf := map[string]string{}
+			if dev.CirrusHostID != "" {
+				dcf["cirrus_host_id"] = dev.CirrusHostID
+			}
+			role := dev.DeviceRole
+			if role == "" {
+				role = "server"
+			}
+			h.store.AddDevice(dev.Name, role, siteID, rackID, dev.Position, "active", dcf)
+		}
+	}
 }
 
 func (h *Handler) getStats(w http.ResponseWriter, _ *http.Request) {
@@ -176,6 +212,34 @@ func toSiteResponse(s *state.Site) siteResponse {
 		Region:       s.Region,
 		CustomFields: s.CustomFields,
 	}
+}
+
+type locationResponse struct {
+	ID           int               `json:"id"`
+	Name         string            `json:"name"`
+	Site         state.NamedRef    `json:"site"`
+	Parent       *state.NamedRef   `json:"parent"`
+	Depth        int               `json:"_depth"`
+	CustomFields map[string]string `json:"custom_fields"`
+}
+
+func (h *Handler) toLocationResponse(loc *state.Location) locationResponse {
+	resp := locationResponse{
+		ID:           loc.ID,
+		Name:         loc.Name,
+		CustomFields: loc.CustomFields,
+	}
+	if site := h.store.GetSite(loc.SiteID); site != nil {
+		resp.Site = state.NamedRef{ID: site.ID, Name: site.Name}
+	}
+	if loc.ParentID != 0 {
+		if parent := h.store.GetLocation(loc.ParentID); parent != nil {
+			resp.Parent = &state.NamedRef{ID: parent.ID, Name: parent.Name}
+		}
+	}
+	// Calculate depth from ancestors
+	resp.Depth = len(h.store.LocationAncestors(loc.ID)) - 1
+	return resp
 }
 
 type rackResponse struct {
@@ -230,6 +294,18 @@ func (h *Handler) toDeviceResponse(d *state.Device) deviceResponse {
 		resp.Rack = state.NamedRef{ID: rk.ID, Name: rk.Name}
 	}
 	return resp
+}
+
+func queryInt(r *http.Request, key string, defaultVal int) int {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return defaultVal
+	}
+	return n
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

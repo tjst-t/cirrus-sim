@@ -159,13 +159,13 @@ func TestDeviceResponseV4Format(t *testing.T) {
 		t.Errorf("face.value = %v, want front", face["value"])
 	}
 
-	// Rack should be a nested ref with slug
+	// Rack should be a nested ref with name and device_count
 	rack, ok := dev["rack"].(map[string]any)
 	if !ok {
 		t.Fatal("rack missing")
 	}
-	if _, ok := rack["slug"]; !ok {
-		t.Error("rack nested ref missing slug")
+	if _, ok := rack["name"]; !ok {
+		t.Error("rack nested ref missing name")
 	}
 }
 

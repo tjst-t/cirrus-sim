@@ -193,118 +193,167 @@ func makeStatus(value string) statusValue {
 
 // ── Nested references ──
 
-type nestedRef struct {
+// briefSiteRef matches BriefSite in go-netbox (required: id, url, display, name, slug).
+type briefSiteRef struct {
 	ID         int    `json:"id"`
 	URL        string `json:"url"`
-	DisplayURL string `json:"display_url"`
+	DisplayURL string `json:"display_url,omitempty"`
 	Display    string `json:"display"`
 	Name       string `json:"name"`
 	Slug       string `json:"slug"`
 }
 
-type nestedLocationRef struct {
+// briefLocationRef matches BriefLocation in go-netbox (required: id, url, display, name, slug, _depth).
+type briefLocationRef struct {
 	ID         int    `json:"id"`
 	URL        string `json:"url"`
-	DisplayURL string `json:"display_url"`
+	DisplayURL string `json:"display_url,omitempty"`
 	Display    string `json:"display"`
 	Name       string `json:"name"`
 	Slug       string `json:"slug"`
-	RackCount  int    `json:"rack_count"`
+	RackCount  int    `json:"rack_count,omitempty"`
 	Depth      int    `json:"_depth"`
 }
 
-type nestedRoleRef struct {
-	ID         int    `json:"id"`
-	URL        string `json:"url"`
-	DisplayURL string `json:"display_url"`
-	Display    string `json:"display"`
-	Name       string `json:"name"`
-	Slug       string `json:"slug"`
+// briefRackRef matches BriefRack in go-netbox (required: id, url, display, name).
+type briefRackRef struct {
+	ID          int    `json:"id"`
+	URL         string `json:"url"`
+	DisplayURL  string `json:"display_url,omitempty"`
+	Display     string `json:"display"`
+	Name        string `json:"name"`
+	DeviceCount int    `json:"device_count,omitempty"`
 }
 
-func (h *Handler) siteRef(siteID int) *nestedRef {
+// briefRoleRef matches BriefDeviceRole in go-netbox (required: id, url, display, name, slug, _depth).
+type briefRoleRef struct {
+	ID      int    `json:"id"`
+	URL     string `json:"url"`
+	Display string `json:"display"`
+	Name    string `json:"name"`
+	Slug    string `json:"slug"`
+	Depth   int    `json:"_depth"`
+}
+
+// briefDeviceTypeRef matches BriefDeviceType (required: id, url, display, manufacturer, model, slug).
+type briefDeviceTypeRef struct {
+	ID           int              `json:"id"`
+	URL          string           `json:"url"`
+	Display      string           `json:"display"`
+	Manufacturer briefManufacturer `json:"manufacturer"`
+	Model        string           `json:"model"`
+	Slug         string           `json:"slug"`
+}
+
+// briefManufacturer matches BriefManufacturer (required: id, url, display, name, slug).
+type briefManufacturer struct {
+	ID      int    `json:"id"`
+	URL     string `json:"url"`
+	Display string `json:"display"`
+	Name    string `json:"name"`
+	Slug    string `json:"slug"`
+}
+
+func (h *Handler) siteRef(siteID int) *briefSiteRef {
 	site := h.store.GetSite(siteID)
 	if site == nil {
 		return nil
 	}
-	return &nestedRef{
-		ID:         site.ID,
-		URL:        fmt.Sprintf("%s/dcim/sites/%d/", h.baseURL, site.ID),
-		DisplayURL: fmt.Sprintf("%s/dcim/sites/%d/", h.baseURL, site.ID),
-		Display:    site.Name,
-		Name:       site.Name,
-		Slug:       site.Slug,
+	return &briefSiteRef{
+		ID:      site.ID,
+		URL:     fmt.Sprintf("%s/dcim/sites/%d/", h.baseURL, site.ID),
+		Display: site.Name,
+		Name:    site.Name,
+		Slug:    site.Slug,
 	}
 }
 
-func (h *Handler) locationRef(locID int) *nestedLocationRef {
+func (h *Handler) locationRef(locID int) *briefLocationRef {
 	loc := h.store.GetLocation(locID)
 	if loc == nil {
 		return nil
 	}
 	depth := len(h.store.LocationAncestors(loc.ID)) - 1
-	return &nestedLocationRef{
-		ID:         loc.ID,
-		URL:        fmt.Sprintf("%s/dcim/locations/%d/", h.baseURL, loc.ID),
-		DisplayURL: fmt.Sprintf("%s/dcim/locations/%d/", h.baseURL, loc.ID),
-		Display:    loc.Name,
-		Name:       loc.Name,
-		Slug:       loc.Slug,
-		RackCount:  h.store.CountRacksInLocation(loc.ID),
-		Depth:      depth,
+	return &briefLocationRef{
+		ID:        loc.ID,
+		URL:       fmt.Sprintf("%s/dcim/locations/%d/", h.baseURL, loc.ID),
+		Display:   loc.Name,
+		Name:      loc.Name,
+		Slug:      loc.Slug,
+		RackCount: h.store.CountRacksInLocation(loc.ID),
+		Depth:     depth,
 	}
 }
 
-func (h *Handler) rackRef(rackID int) *nestedRef {
+func (h *Handler) rackRef(rackID int) *briefRackRef {
 	rk := h.store.GetRack(rackID)
 	if rk == nil {
 		return nil
 	}
-	return &nestedRef{
-		ID:         rk.ID,
-		URL:        fmt.Sprintf("%s/dcim/racks/%d/", h.baseURL, rk.ID),
-		DisplayURL: fmt.Sprintf("%s/dcim/racks/%d/", h.baseURL, rk.ID),
-		Display:    rk.Name,
-		Name:       rk.Name,
-		Slug:       rk.Slug,
+	return &briefRackRef{
+		ID:          rk.ID,
+		URL:         fmt.Sprintf("%s/dcim/racks/%d/", h.baseURL, rk.ID),
+		Display:     rk.Name,
+		Name:        rk.Name,
+		DeviceCount: h.store.CountDevicesInRack(rk.ID),
 	}
 }
 
-func roleRef(name string) nestedRoleRef {
+func (h *Handler) roleRef(name string) briefRoleRef {
 	slug := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
-	return nestedRoleRef{
-		ID:         0,
-		URL:        "",
-		DisplayURL: "",
-		Display:    name,
-		Name:       name,
-		Slug:       slug,
+	return briefRoleRef{
+		ID:      1,
+		URL:     fmt.Sprintf("%s/dcim/device-roles/1/", h.baseURL),
+		Display: name,
+		Name:    name,
+		Slug:    slug,
+		Depth:   0,
+	}
+}
+
+func (h *Handler) deviceTypeRef() briefDeviceTypeRef {
+	return briefDeviceTypeRef{
+		ID:      1,
+		URL:     fmt.Sprintf("%s/dcim/device-types/1/", h.baseURL),
+		Display: "Generic Server",
+		Manufacturer: briefManufacturer{
+			ID:      1,
+			URL:     fmt.Sprintf("%s/dcim/manufacturers/1/", h.baseURL),
+			Display: "Generic",
+			Name:    "Generic",
+			Slug:    "generic",
+		},
+		Model: "Generic Server",
+		Slug:  "generic-server",
 	}
 }
 
 // ── Site response ──
 
 type siteResponse struct {
-	ID           int               `json:"id"`
-	URL          string            `json:"url"`
-	DisplayURL   string            `json:"display_url"`
-	Display      string            `json:"display"`
-	Name         string            `json:"name"`
-	Slug         string            `json:"slug"`
-	Status       statusValue       `json:"status"`
-	Region       *state.NamedRef   `json:"region"`
-	Tenant       *interface{}      `json:"tenant"`
-	Facility     string            `json:"facility"`
-	Description  string            `json:"description"`
-	Tags         []interface{}     `json:"tags"`
-	CustomFields map[string]string `json:"custom_fields"`
-	Created      string            `json:"created"`
-	LastUpdated  string            `json:"last_updated"`
-	RackCount    int               `json:"rack_count"`
-	DeviceCount  int               `json:"device_count"`
+	ID           int                    `json:"id"`
+	URL          string                 `json:"url"`
+	DisplayURL   string                 `json:"display_url"`
+	Display      string                 `json:"display"`
+	Name         string                 `json:"name"`
+	Slug         string                 `json:"slug"`
+	Status       *statusValue           `json:"status,omitempty"`
+	Region       interface{}            `json:"region"`
+	Tenant       interface{}            `json:"tenant"`
+	Facility     string                 `json:"facility"`
+	Description  string                 `json:"description"`
+	Tags         []interface{}          `json:"tags"`
+	CustomFields map[string]interface{} `json:"custom_fields"`
+	Created      *string                `json:"created"`
+	LastUpdated  *string                `json:"last_updated"`
+	RackCount    int                    `json:"rack_count"`
+	DeviceCount  int                    `json:"device_count"`
 }
 
 func (h *Handler) toSiteResponse(s *state.Site) siteResponse {
+	status := makeStatus(s.Status)
+	created := s.CreatedAt.Format(time.RFC3339)
+	updated := s.LastUpdated.Format(time.RFC3339)
 	return siteResponse{
 		ID:           s.ID,
 		URL:          fmt.Sprintf("%s/dcim/sites/%d/", h.baseURL, s.ID),
@@ -312,14 +361,13 @@ func (h *Handler) toSiteResponse(s *state.Site) siteResponse {
 		Display:      s.Name,
 		Name:         s.Name,
 		Slug:         s.Slug,
-		Status:       makeStatus(s.Status),
+		Status:       &status,
 		Region:       s.Region,
-		Facility:     "",
 		Description:  s.Description,
 		Tags:         s.Tags,
-		CustomFields: s.CustomFields,
-		Created:      s.CreatedAt.Format(time.DateOnly),
-		LastUpdated:  s.LastUpdated.Format(time.RFC3339),
+		CustomFields: toInterfaceMap(s.CustomFields),
+		Created:      &created,
+		LastUpdated:  &updated,
 		RackCount:    h.store.CountRacksInSite(s.ID),
 		DeviceCount:  h.store.CountDevicesInSite(s.ID),
 	}
@@ -328,31 +376,34 @@ func (h *Handler) toSiteResponse(s *state.Site) siteResponse {
 // ── Location response ──
 
 type locationResponse struct {
-	ID           int                `json:"id"`
-	URL          string             `json:"url"`
-	DisplayURL   string             `json:"display_url"`
-	Display      string             `json:"display"`
-	Name         string             `json:"name"`
-	Slug         string             `json:"slug"`
-	Site         *nestedRef         `json:"site"`
-	Parent       *nestedLocationRef `json:"parent"`
-	Status       statusValue        `json:"status"`
-	Tenant       *interface{}       `json:"tenant"`
-	Description  string             `json:"description"`
-	Tags         []interface{}      `json:"tags"`
-	CustomFields map[string]string  `json:"custom_fields"`
-	Created      string             `json:"created"`
-	LastUpdated  string             `json:"last_updated"`
-	RackCount    int                `json:"rack_count"`
-	DeviceCount  int                `json:"device_count"`
-	Depth        int                `json:"_depth"`
+	ID           int                    `json:"id"`
+	URL          string                 `json:"url"`
+	DisplayURL   string                 `json:"display_url"`
+	Display      string                 `json:"display"`
+	Name         string                 `json:"name"`
+	Slug         string                 `json:"slug"`
+	Site         *briefSiteRef          `json:"site"`
+	Parent       *briefLocationRef      `json:"parent"`
+	Status       *statusValue           `json:"status,omitempty"`
+	Tenant       interface{}            `json:"tenant"`
+	Description  string                 `json:"description"`
+	Tags         []interface{}          `json:"tags"`
+	CustomFields map[string]interface{} `json:"custom_fields"`
+	Created      *string                `json:"created"`
+	LastUpdated  *string                `json:"last_updated"`
+	RackCount    int                    `json:"rack_count"`
+	DeviceCount  int                    `json:"device_count"`
+	Depth        int                    `json:"_depth"`
 }
 
 func (h *Handler) toLocationResponse(loc *state.Location) locationResponse {
-	var parent *nestedLocationRef
+	var parent *briefLocationRef
 	if loc.ParentID != 0 {
 		parent = h.locationRef(loc.ParentID)
 	}
+	status := makeStatus(loc.Status)
+	created := loc.CreatedAt.Format(time.RFC3339)
+	updated := loc.LastUpdated.Format(time.RFC3339)
 	depth := len(h.store.LocationAncestors(loc.ID)) - 1
 	return locationResponse{
 		ID:           loc.ID,
@@ -363,12 +414,12 @@ func (h *Handler) toLocationResponse(loc *state.Location) locationResponse {
 		Slug:         loc.Slug,
 		Site:         h.siteRef(loc.SiteID),
 		Parent:       parent,
-		Status:       makeStatus(loc.Status),
+		Status:       &status,
 		Description:  loc.Description,
 		Tags:         loc.Tags,
-		CustomFields: loc.CustomFields,
-		Created:      loc.CreatedAt.Format(time.DateOnly),
-		LastUpdated:  loc.LastUpdated.Format(time.RFC3339),
+		CustomFields: toInterfaceMap(loc.CustomFields),
+		Created:      &created,
+		LastUpdated:  &updated,
 		RackCount:    h.store.CountRacksInLocation(loc.ID),
 		DeviceCount:  h.store.CountDevicesInLocation(loc.ID),
 		Depth:        depth,
@@ -378,29 +429,32 @@ func (h *Handler) toLocationResponse(loc *state.Location) locationResponse {
 // ── Rack response ──
 
 type rackResponse struct {
-	ID           int                `json:"id"`
-	URL          string             `json:"url"`
-	DisplayURL   string             `json:"display_url"`
-	Display      string             `json:"display"`
-	Name         string             `json:"name"`
-	Site         *nestedRef         `json:"site"`
-	Location     *nestedLocationRef `json:"location"`
-	Status       statusValue        `json:"status"`
-	Tenant       *interface{}       `json:"tenant"`
-	UHeight      int                `json:"u_height"`
-	Description  string             `json:"description"`
-	Tags         []interface{}      `json:"tags"`
-	CustomFields map[string]string  `json:"custom_fields"`
-	Created      string             `json:"created"`
-	LastUpdated  string             `json:"last_updated"`
-	DeviceCount  int                `json:"device_count"`
+	ID           int                    `json:"id"`
+	URL          string                 `json:"url"`
+	DisplayURL   string                 `json:"display_url"`
+	Display      string                 `json:"display"`
+	Name         string                 `json:"name"`
+	Site         *briefSiteRef          `json:"site"`
+	Location     *briefLocationRef      `json:"location"`
+	Status       *statusValue           `json:"status,omitempty"`
+	Tenant       interface{}            `json:"tenant"`
+	UHeight      int                    `json:"u_height"`
+	Description  string                 `json:"description"`
+	Tags         []interface{}          `json:"tags"`
+	CustomFields map[string]interface{} `json:"custom_fields"`
+	Created      *string                `json:"created"`
+	LastUpdated  *string                `json:"last_updated"`
+	DeviceCount  int                    `json:"device_count"`
 }
 
 func (h *Handler) toRackResponse(rk *state.Rack) rackResponse {
-	var loc *nestedLocationRef
+	var loc *briefLocationRef
 	if rk.LocationID != 0 {
 		loc = h.locationRef(rk.LocationID)
 	}
+	status := makeStatus(rk.Status)
+	created := rk.CreatedAt.Format(time.RFC3339)
+	updated := rk.LastUpdated.Format(time.RFC3339)
 	return rackResponse{
 		ID:           rk.ID,
 		URL:          fmt.Sprintf("%s/dcim/racks/%d/", h.baseURL, rk.ID),
@@ -409,13 +463,13 @@ func (h *Handler) toRackResponse(rk *state.Rack) rackResponse {
 		Name:         rk.Name,
 		Site:         h.siteRef(rk.SiteID),
 		Location:     loc,
-		Status:       makeStatus(rk.Status),
+		Status:       &status,
 		UHeight:      rk.UHeight,
 		Description:  rk.Description,
 		Tags:         rk.Tags,
-		CustomFields: rk.CustomFields,
-		Created:      rk.CreatedAt.Format(time.DateOnly),
-		LastUpdated:  rk.LastUpdated.Format(time.RFC3339),
+		CustomFields: toInterfaceMap(rk.CustomFields),
+		Created:      &created,
+		LastUpdated:  &updated,
 		DeviceCount:  h.store.CountDevicesInRack(rk.ID),
 	}
 }
@@ -423,57 +477,85 @@ func (h *Handler) toRackResponse(rk *state.Rack) rackResponse {
 // ── Device response ──
 
 type deviceResponse struct {
-	ID           int                `json:"id"`
-	URL          string             `json:"url"`
-	DisplayURL   string             `json:"display_url"`
-	Display      string             `json:"display"`
-	Name         string             `json:"name"`
-	Role         nestedRoleRef      `json:"role"`
-	Site         *nestedRef         `json:"site"`
-	Location     *nestedLocationRef `json:"location"`
-	Rack         *nestedRef         `json:"rack"`
-	Position     *int               `json:"position"`
-	Face         statusValue        `json:"face"`
-	Status       statusValue        `json:"status"`
-	Tenant       *interface{}       `json:"tenant"`
-	Description  string             `json:"description"`
-	Tags         []interface{}      `json:"tags"`
-	CustomFields map[string]string  `json:"custom_fields"`
-	Created      string             `json:"created"`
-	LastUpdated  string             `json:"last_updated"`
+	ID                      int                    `json:"id"`
+	URL                     string                 `json:"url"`
+	DisplayURL              string                 `json:"display_url"`
+	Display                 string                 `json:"display"`
+	Name                    string                 `json:"name"`
+	DeviceType              briefDeviceTypeRef     `json:"device_type"`
+	Role                    briefRoleRef           `json:"role"`
+	Site                    *briefSiteRef          `json:"site"`
+	Location                *briefLocationRef      `json:"location"`
+	Rack                    *briefRackRef          `json:"rack"`
+	Position                *float64               `json:"position"`
+	Face                    *statusValue           `json:"face,omitempty"`
+	Status                  *statusValue           `json:"status,omitempty"`
+	Tenant                  interface{}            `json:"tenant"`
+	Description             string                 `json:"description"`
+	Tags                    []interface{}          `json:"tags"`
+	CustomFields            map[string]interface{} `json:"custom_fields"`
+	Created                 *string                `json:"created"`
+	LastUpdated             *string                `json:"last_updated"`
+	ConsolePortCount        int                    `json:"console_port_count"`
+	ConsoleServerPortCount  int                    `json:"console_server_port_count"`
+	PowerPortCount          int                    `json:"power_port_count"`
+	PowerOutletCount        int                    `json:"power_outlet_count"`
+	InterfaceCount          int                    `json:"interface_count"`
+	FrontPortCount          int                    `json:"front_port_count"`
+	RearPortCount           int                    `json:"rear_port_count"`
+	DeviceBayCount          int                    `json:"device_bay_count"`
+	ModuleBayCount          int                    `json:"module_bay_count"`
+	InventoryItemCount      int                    `json:"inventory_item_count"`
 }
 
 func (h *Handler) toDeviceResponse(d *state.Device) deviceResponse {
-	var loc *nestedLocationRef
+	var loc *briefLocationRef
 	if d.LocationID != 0 {
 		loc = h.locationRef(d.LocationID)
 	}
-	var pos *int
+	var pos *float64
 	if d.Position > 0 {
-		pos = &d.Position
+		p := float64(d.Position)
+		pos = &p
 	}
+	face := makeStatus(d.Face)
+	status := makeStatus(d.Status)
+	created := d.CreatedAt.Format(time.RFC3339)
+	updated := d.LastUpdated.Format(time.RFC3339)
 	return deviceResponse{
 		ID:           d.ID,
 		URL:          fmt.Sprintf("%s/dcim/devices/%d/", h.baseURL, d.ID),
 		DisplayURL:   fmt.Sprintf("%s/dcim/devices/%d/", h.baseURL, d.ID),
 		Display:      d.Name,
 		Name:         d.Name,
-		Role:         roleRef(d.Role),
+		DeviceType:   h.deviceTypeRef(),
+		Role:         h.roleRef(d.Role),
 		Site:         h.siteRef(d.SiteID),
 		Location:     loc,
 		Rack:         h.rackRef(d.RackID),
 		Position:     pos,
-		Face:         makeStatus(d.Face),
-		Status:       makeStatus(d.Status),
+		Face:         &face,
+		Status:       &status,
 		Description:  d.Description,
 		Tags:         d.Tags,
-		CustomFields: d.CustomFields,
-		Created:      d.CreatedAt.Format(time.DateOnly),
-		LastUpdated:  d.LastUpdated.Format(time.RFC3339),
+		CustomFields: toInterfaceMap(d.CustomFields),
+		Created:      &created,
+		LastUpdated:  &updated,
 	}
 }
 
 // ── Helpers ──
+
+func toInterfaceMap(m map[string]string) map[string]interface{} {
+	if m == nil {
+		return map[string]interface{}{}
+	}
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
 
 func queryInt(r *http.Request, key string, defaultVal int) int {
 	v := r.URL.Query().Get(key)

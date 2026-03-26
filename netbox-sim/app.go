@@ -58,8 +58,8 @@ func (s *Server) SeedRack(name string, siteID, locationID int, customFields map[
 }
 
 // SeedDevice adds a device in a rack.
-func (s *Server) SeedDevice(name, role string, siteID, rackID, position int, customFields map[string]string) {
-	s.store.AddDevice(name, role, siteID, rackID, position, "active", customFields)
+func (s *Server) SeedDevice(name, role string, siteID, locationID, rackID, position int, customFields map[string]string) {
+	s.store.AddDevice(name, role, siteID, locationID, rackID, position, "active", customFields)
 }
 
 // Start starts the server in a goroutine.

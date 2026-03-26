@@ -171,7 +171,7 @@ func seedNetboxTopology(netbox *netboxsim.Server, env datagen.Environment, resul
 					host := result.Hosts[hostIdx]
 					hostIdx++
 
-					netbox.SeedDevice(host.HostID, "server", siteID, rackID, h, map[string]string{
+					netbox.SeedDevice(host.HostID, "server", siteID, rowID, rackID, h, map[string]string{
 						"cirrus_host_id": host.HostID,
 					})
 				}

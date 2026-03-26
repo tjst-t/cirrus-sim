@@ -1,53 +1,97 @@
 // Package state provides in-memory storage for NetBox simulator entities.
 package state
 
-import "sync"
+import (
+	"strings"
+	"sync"
+	"time"
+)
 
-// NamedRef represents a reference to a named entity with an ID.
+// slugify converts a name to a URL-friendly slug.
+func slugify(name string) string {
+	s := strings.ToLower(name)
+	s = strings.ReplaceAll(s, " ", "-")
+	s = strings.ReplaceAll(s, "_", "-")
+	// Remove any characters that aren't alphanumeric or hyphens
+	var b strings.Builder
+	for _, c := range s {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
+}
+
+// NamedRef represents a brief nested reference to a named entity.
 type NamedRef struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID      int    `json:"id"`
+	URL     string `json:"url"`
+	Display string `json:"display"`
+	Name    string `json:"name"`
+	Slug    string `json:"slug"`
 }
 
 // Site represents a NetBox site.
 type Site struct {
 	ID           int               `json:"id"`
 	Name         string            `json:"name"`
+	Slug         string            `json:"slug"`
 	Status       string            `json:"status"`
 	Region       *NamedRef         `json:"region"`
+	Description  string            `json:"description"`
+	Tags         []interface{}     `json:"tags"`
 	CustomFields map[string]string `json:"custom_fields"`
+	CreatedAt    time.Time         `json:"created"`
+	LastUpdated  time.Time         `json:"last_updated"`
 }
 
 // Location represents a hierarchical location within a site (floor, hall, rack row, etc.).
-// Locations can be nested via ParentID to form a tree: Site → Floor → Rack Row.
 type Location struct {
 	ID           int               `json:"id"`
 	Name         string            `json:"name"`
+	Slug         string            `json:"slug"`
 	SiteID       int               `json:"site_id"`
 	ParentID     int               `json:"parent_id,omitempty"`
+	Status       string            `json:"status"`
+	Description  string            `json:"description"`
+	Tags         []interface{}     `json:"tags"`
 	CustomFields map[string]string `json:"custom_fields"`
+	CreatedAt    time.Time         `json:"created"`
+	LastUpdated  time.Time         `json:"last_updated"`
 }
 
 // Rack represents a NetBox rack.
 type Rack struct {
 	ID           int               `json:"id"`
 	Name         string            `json:"name"`
+	Slug         string            `json:"slug"`
 	SiteID       int               `json:"site_id"`
 	LocationID   int               `json:"location_id"`
 	Status       string            `json:"status"`
+	Description  string            `json:"description"`
+	UHeight      int               `json:"u_height"`
+	Tags         []interface{}     `json:"tags"`
 	CustomFields map[string]string `json:"custom_fields"`
+	CreatedAt    time.Time         `json:"created"`
+	LastUpdated  time.Time         `json:"last_updated"`
 }
 
 // Device represents a NetBox device.
 type Device struct {
 	ID           int               `json:"id"`
 	Name         string            `json:"name"`
-	DeviceRole   string            `json:"device_role"`
+	Role         string            `json:"role"`
 	SiteID       int               `json:"site_id"`
+	LocationID   int               `json:"location_id"`
 	RackID       int               `json:"rack_id"`
 	Position     int               `json:"position"`
+	Face         string            `json:"face"`
 	Status       string            `json:"status"`
+	Description  string            `json:"description"`
+	Tags         []interface{}     `json:"tags"`
 	CustomFields map[string]string `json:"custom_fields"`
+	CreatedAt    time.Time         `json:"created"`
+	LastUpdated  time.Time         `json:"last_updated"`
 }
 
 // Store holds all in-memory state for the NetBox simulator.
@@ -93,19 +137,23 @@ func (s *Store) AddSite(name, status string, region *NamedRef, customFields map[
 	if customFields == nil {
 		customFields = make(map[string]string)
 	}
+	now := time.Now().UTC()
 
 	s.sites[id] = &Site{
 		ID:           id,
 		Name:         name,
+		Slug:         slugify(name),
 		Status:       status,
 		Region:       region,
+		Tags:         []interface{}{},
 		CustomFields: customFields,
+		CreatedAt:    now,
+		LastUpdated:  now,
 	}
 	return id
 }
 
 // AddLocation adds a location and returns its assigned ID.
-// parentID of 0 means a top-level location under the site.
 func (s *Store) AddLocation(name string, siteID, parentID int, customFields map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,13 +164,19 @@ func (s *Store) AddLocation(name string, siteID, parentID int, customFields map[
 	if customFields == nil {
 		customFields = make(map[string]string)
 	}
+	now := time.Now().UTC()
 
 	s.locations[id] = &Location{
 		ID:           id,
 		Name:         name,
+		Slug:         slugify(name),
 		SiteID:       siteID,
 		ParentID:     parentID,
+		Status:       "active",
+		Tags:         []interface{}{},
 		CustomFields: customFields,
+		CreatedAt:    now,
+		LastUpdated:  now,
 	}
 	return id
 }
@@ -141,20 +195,26 @@ func (s *Store) AddRack(name string, siteID, locationID int, status string, cust
 	if customFields == nil {
 		customFields = make(map[string]string)
 	}
+	now := time.Now().UTC()
 
 	s.racks[id] = &Rack{
 		ID:           id,
 		Name:         name,
+		Slug:         slugify(name),
 		SiteID:       siteID,
 		LocationID:   locationID,
 		Status:       status,
+		UHeight:      42,
+		Tags:         []interface{}{},
 		CustomFields: customFields,
+		CreatedAt:    now,
+		LastUpdated:  now,
 	}
 	return id
 }
 
 // AddDevice adds a device and returns its assigned ID.
-func (s *Store) AddDevice(name, deviceRole string, siteID, rackID, position int, status string, customFields map[string]string) int {
+func (s *Store) AddDevice(name, role string, siteID, locationID, rackID, position int, status string, customFields map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -164,22 +224,28 @@ func (s *Store) AddDevice(name, deviceRole string, siteID, rackID, position int,
 	if status == "" {
 		status = "active"
 	}
-	if deviceRole == "" {
-		deviceRole = "server"
+	if role == "" {
+		role = "server"
 	}
 	if customFields == nil {
 		customFields = make(map[string]string)
 	}
+	now := time.Now().UTC()
 
 	s.devices[id] = &Device{
 		ID:           id,
 		Name:         name,
-		DeviceRole:   deviceRole,
+		Role:         role,
 		SiteID:       siteID,
+		LocationID:   locationID,
 		RackID:       rackID,
 		Position:     position,
+		Face:         "front",
 		Status:       status,
+		Tags:         []interface{}{},
 		CustomFields: customFields,
+		CreatedAt:    now,
+		LastUpdated:  now,
 	}
 	return id
 }
@@ -217,7 +283,6 @@ func (s *Store) ListLocations(siteID, parentID int) []*Location {
 }
 
 // ListRacks returns all racks, optionally filtered by siteID.
-// If siteID is 0, all racks are returned.
 func (s *Store) ListRacks(siteID int) []*Rack {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -233,8 +298,6 @@ func (s *Store) ListRacks(siteID int) []*Rack {
 }
 
 // ListDevices returns all devices, optionally filtered by rackID and/or role.
-// If rackID is 0, the rack filter is not applied.
-// If role is empty, the role filter is not applied.
 func (s *Store) ListDevices(rackID int, role string) []*Device {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -244,7 +307,7 @@ func (s *Store) ListDevices(rackID int, role string) []*Device {
 		if rackID != 0 && device.RackID != rackID {
 			continue
 		}
-		if role != "" && device.DeviceRole != role {
+		if role != "" && device.Role != role {
 			continue
 		}
 		devices = append(devices, device)
@@ -273,8 +336,7 @@ func (s *Store) GetRack(id int) *Rack {
 	return s.racks[id]
 }
 
-// LocationAncestors returns the chain of parent locations from the given location up to the site.
-// The result is ordered from the given location to the root (site-level).
+// LocationAncestors returns the chain of parent locations from the given location up to the root.
 func (s *Store) LocationAncestors(locationID int) []*Location {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -283,7 +345,7 @@ func (s *Store) LocationAncestors(locationID int) []*Location {
 	seen := make(map[int]bool)
 	for id := locationID; id != 0; {
 		if seen[id] {
-			break // prevent infinite loop
+			break
 		}
 		seen[id] = true
 		loc, ok := s.locations[id]
@@ -294,6 +356,71 @@ func (s *Store) LocationAncestors(locationID int) []*Location {
 		id = loc.ParentID
 	}
 	return chain
+}
+
+// CountDevicesInRack returns the number of devices in a rack.
+func (s *Store) CountDevicesInRack(rackID int) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, d := range s.devices {
+		if d.RackID == rackID {
+			count++
+		}
+	}
+	return count
+}
+
+// CountRacksInLocation returns the number of racks in a location.
+func (s *Store) CountRacksInLocation(locationID int) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, r := range s.racks {
+		if r.LocationID == locationID {
+			count++
+		}
+	}
+	return count
+}
+
+// CountDevicesInLocation returns the number of devices in a location.
+func (s *Store) CountDevicesInLocation(locationID int) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, d := range s.devices {
+		if d.LocationID == locationID {
+			count++
+		}
+	}
+	return count
+}
+
+// CountRacksInSite returns the number of racks in a site.
+func (s *Store) CountRacksInSite(siteID int) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, r := range s.racks {
+		if r.SiteID == siteID {
+			count++
+		}
+	}
+	return count
+}
+
+// CountDevicesInSite returns the number of devices in a site.
+func (s *Store) CountDevicesInSite(siteID int) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, d := range s.devices {
+		if d.SiteID == siteID {
+			count++
+		}
+	}
+	return count
 }
 
 // Stats holds counts for all entity types.

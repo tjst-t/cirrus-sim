@@ -16,6 +16,7 @@ import (
 // Server is the storage-sim server instance.
 type Server struct {
 	httpServer *http.Server
+	store      *state.Store
 	logger     *slog.Logger
 }
 
@@ -40,8 +41,31 @@ func New(port string, logger *slog.Logger) *Server {
 			Handler:           mux,
 			ReadHeaderTimeout: 10 * time.Second,
 		},
+		store:  store,
 		logger: logger,
 	}
+}
+
+// SeedBackend registers a storage backend.
+func (s *Server) SeedBackend(cfg BackendConfig) error {
+	b := state.Backend{
+		BackendID:          cfg.BackendID,
+		TotalCapacityGB:    cfg.TotalCapacityGB,
+		TotalIOPS:          cfg.TotalIOPS,
+		Capabilities:       cfg.Capabilities,
+		State:              state.BackendActive,
+		OverprovisionRatio: cfg.OverprovisionRatio,
+	}
+	return s.store.AddBackend(context.Background(), b)
+}
+
+// BackendConfig holds the configuration for seeding a storage backend.
+type BackendConfig struct {
+	BackendID          string
+	TotalCapacityGB    int64
+	TotalIOPS          int64
+	Capabilities       []string
+	OverprovisionRatio float64
 }
 
 // Start starts the server in a goroutine. Call Shutdown to stop.

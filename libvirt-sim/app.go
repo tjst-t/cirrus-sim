@@ -17,6 +17,7 @@ import (
 type Server struct {
 	httpServer *http.Server
 	rpcServer  *rpc.Server
+	store      *state.Store
 	logger     *slog.Logger
 }
 
@@ -44,8 +45,45 @@ func New(port string, logger *slog.Logger) *Server {
 			ReadHeaderTimeout: 10 * time.Second,
 		},
 		rpcServer: rpcServer,
+		store:     store,
 		logger:    logger,
 	}
+}
+
+// SeedHost registers a host and starts its RPC listener.
+func (s *Server) SeedHost(ctx context.Context, cfg HostConfig) error {
+	host := &state.Host{
+		HostID:             cfg.HostID,
+		LibvirtPort:        cfg.LibvirtPort,
+		CPUModel:           cfg.CPUModel,
+		CPUSockets:         cfg.CPUSockets,
+		CoresPerSocket:     cfg.CoresPerSocket,
+		ThreadsPerCore:     cfg.ThreadsPerCore,
+		MemoryMB:           cfg.MemoryMB,
+		CPUOvercommitRatio: cfg.CPUOvercommitRatio,
+		MemOvercommitRatio: cfg.MemOvercommitRatio,
+	}
+	if err := s.store.AddHost(host); err != nil {
+		return fmt.Errorf("add host %s: %w", cfg.HostID, err)
+	}
+	if err := s.rpcServer.StartListener(ctx, cfg.HostID, cfg.LibvirtPort); err != nil {
+		_ = s.store.RemoveHost(cfg.HostID)
+		return fmt.Errorf("start listener for host %s: %w", cfg.HostID, err)
+	}
+	return nil
+}
+
+// HostConfig holds the configuration for seeding a host.
+type HostConfig struct {
+	HostID             string
+	LibvirtPort        int
+	CPUModel           string
+	CPUSockets         int
+	CoresPerSocket     int
+	ThreadsPerCore     int
+	MemoryMB           int64
+	CPUOvercommitRatio float64
+	MemOvercommitRatio float64
 }
 
 // Start starts the management API server in a goroutine.

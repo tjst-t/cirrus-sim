@@ -26,7 +26,11 @@ func TestParseDomainXML(t *testing.T) {
       <source protocol="rbd" name="cirrus-volumes/vol-001"/>
     </disk>
     <interface type="bridge">
+      <source bridge="br-int"/>
       <target dev="ovn-abc123"/>
+      <virtualport type="openvswitch">
+        <parameters interfaceid="aaa-bbb-ccc"/>
+      </virtualport>
     </interface>
   </devices>
 </domain>`,
@@ -140,7 +144,11 @@ func TestDomainDevices(t *testing.T) {
       <source protocol="rbd" name="cirrus-volumes/vol-002"/>
     </disk>
     <interface type="bridge">
+      <source bridge="br-int"/>
       <target dev="ovn-abc123"/>
+      <virtualport type="openvswitch">
+        <parameters interfaceid="port-uuid-001"/>
+      </virtualport>
     </interface>
     <hostdev mode="subsystem" type="pci">
       <source><address domain="0x0000" bus="0x3b" slot="0x00" function="0x0"/></source>
@@ -163,5 +171,68 @@ func TestDomainDevices(t *testing.T) {
 	}
 	if dom.Devices.Disks[0].Source.Name != "cirrus-volumes/vol-001" {
 		t.Errorf("disk source = %q", dom.Devices.Disks[0].Source.Name)
+	}
+
+	// Verify OVS virtualport parsing
+	iface := dom.Devices.Interfaces[0]
+	if iface.Source.Bridge != "br-int" {
+		t.Errorf("interface source bridge = %q, want %q", iface.Source.Bridge, "br-int")
+	}
+	if iface.VirtualPort == nil {
+		t.Fatal("virtualport is nil")
+	}
+	if iface.VirtualPort.Type != "openvswitch" {
+		t.Errorf("virtualport type = %q, want %q", iface.VirtualPort.Type, "openvswitch")
+	}
+	if iface.VirtualPort.Parameters.InterfaceID != "port-uuid-001" {
+		t.Errorf("interfaceid = %q, want %q", iface.VirtualPort.Parameters.InterfaceID, "port-uuid-001")
+	}
+
+	// Verify InterfaceIDs helper
+	ids := dom.InterfaceIDs()
+	if len(ids) != 1 || ids[0] != "port-uuid-001" {
+		t.Errorf("InterfaceIDs() = %v, want [port-uuid-001]", ids)
+	}
+}
+
+func TestInterfaceIDsMultiple(t *testing.T) {
+	xmlStr := `<domain type="kvm">
+  <name>vm-multi-nic</name>
+  <uuid>22222222-2222-2222-2222-222222222222</uuid>
+  <memory unit="GiB">4</memory>
+  <vcpu>2</vcpu>
+  <devices>
+    <interface type="bridge">
+      <source bridge="br-int"/>
+      <virtualport type="openvswitch">
+        <parameters interfaceid="lsp-aaa"/>
+      </virtualport>
+    </interface>
+    <interface type="bridge">
+      <source bridge="br-int"/>
+      <virtualport type="openvswitch">
+        <parameters interfaceid="lsp-bbb"/>
+      </virtualport>
+    </interface>
+    <interface type="bridge">
+      <target dev="tap0"/>
+    </interface>
+  </devices>
+</domain>`
+
+	dom, err := ParseDomainXML(xmlStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dom.Devices.Interfaces) != 3 {
+		t.Errorf("interfaces = %d, want 3", len(dom.Devices.Interfaces))
+	}
+
+	ids := dom.InterfaceIDs()
+	if len(ids) != 2 {
+		t.Fatalf("InterfaceIDs() length = %d, want 2", len(ids))
+	}
+	if ids[0] != "lsp-aaa" || ids[1] != "lsp-bbb" {
+		t.Errorf("InterfaceIDs() = %v, want [lsp-aaa lsp-bbb]", ids)
 	}
 }

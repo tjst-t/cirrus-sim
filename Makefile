@@ -83,7 +83,7 @@ serve: build-unified
 	fi
 	@portman env \
 	  --name common \
-	  --name dashboard --expose \
+	  --name dashboard:expose \
 	  --name libvirt-sim \
 	  --name ovn-sim \
 	  --name awx-sim \
@@ -101,6 +101,7 @@ serve: build-unified
 	    -awx=$$AWX_SIM_PORT \
 	    -netbox=$$NETBOX_SIM_PORT \
 	    -storage=$$STORAGE_SIM_PORT \
+	    -env=environments/small.yaml \
 	    > $(LOG_FILE) 2>&1 & \
 	  echo $$! > $(PID_FILE); \
 	  sleep 1; \

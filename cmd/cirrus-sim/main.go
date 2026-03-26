@@ -49,6 +49,7 @@ func main() {
 	netboxPort := flag.String("netbox", envOrDefault("NETBOX_SIM_PORT", "8400"), "netbox-sim port")
 	storagePort := flag.String("storage", envOrDefault("STORAGE_SIM_PORT", "8500"), "storage-sim port")
 	dashboardPort := flag.String("dashboard", envOrDefault("DASHBOARD_PORT", "8080"), "dashboard web UI port")
+	envFile := flag.String("env", envOrDefault("CIRRUS_SIM_ENV", ""), "environment YAML file to seed on startup")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -64,16 +65,21 @@ func main() {
 		"storage-sim": fmt.Sprintf("http://localhost:%s", *storagePort),
 	}
 
+	// Create simulator instances
+	libvirtSim := libvirtsim.New(*libvirtPort, logger.With("sim", "libvirt-sim"))
+	ovnSim := ovnsim.New(*ovnPort, logger.With("sim", "ovn-sim"))
+	storageSim := storagesim.New(*storagePort, logger.With("sim", "storage-sim"))
+
 	sims := []struct {
 		name string
 		srv  Shutdowner
 	}{
 		{"common", common.New(*commonPort, logger.With("sim", "common"))},
-		{"libvirt-sim", libvirtsim.New(*libvirtPort, logger.With("sim", "libvirt-sim"))},
-		{"ovn-sim", ovnsim.New(*ovnPort, logger.With("sim", "ovn-sim"))},
+		{"libvirt-sim", libvirtSim},
+		{"ovn-sim", ovnSim},
 		{"awx-sim", awxsim.New(*awxPort, logger.With("sim", "awx-sim"))},
 		{"netbox-sim", netboxsim.New(*netboxPort, logger.With("sim", "netbox-sim"))},
-		{"storage-sim", storagesim.New(*storagePort, logger.With("sim", "storage-sim"))},
+		{"storage-sim", storageSim},
 		{"dashboard", webui.New(*dashboardPort, endpoints, logger.With("sim", "dashboard"))},
 	}
 
@@ -91,6 +97,15 @@ func main() {
 		s.srv.Start()
 	}
 
+	// Seed environment if specified
+	if *envFile != "" {
+		ctx := context.Background()
+		if err := seedFromEnvFile(ctx, *envFile, libvirtSim, ovnSim, storageSim, logger); err != nil {
+			logger.Error("environment seeding failed", "file", *envFile, "error", err)
+			os.Exit(1)
+		}
+	}
+
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Fprintf(os.Stderr, "  cirrus-sim is running\n")
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
@@ -103,6 +118,10 @@ func main() {
 	fmt.Fprintf(os.Stderr, "  netbox-sim               http://localhost:%s\n", *netboxPort)
 	fmt.Fprintf(os.Stderr, "  storage-sim              http://localhost:%s\n", *storagePort)
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
+	if *envFile != "" {
+		fmt.Fprintf(os.Stderr, "  Environment              %s\n", *envFile)
+		fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
+	}
 	fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop\n\n")
 
 	// Wait for signal

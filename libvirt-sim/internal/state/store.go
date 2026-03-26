@@ -455,6 +455,7 @@ func (s *Store) MigratePrepare(destHostID string, dom *Domain) error {
 		VCPUs:           dom.VCPUs,
 		MemoryKiB:       dom.MemoryKiB,
 		XML:             dom.XML,
+		InterfaceIDs:    dom.InterfaceIDs,
 		CreatedAt:       dom.CreatedAt,
 		MigrationState:  MigrationStatePrepared,
 		MigrationCookie: dom.UUIDString(),

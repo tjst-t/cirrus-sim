@@ -241,11 +241,12 @@ func (h *Handler) handleDomainDefineXMLFlags(msg *Message) *Message {
 	}
 
 	dom := &state.Domain{
-		Name:      domDef.Name,
-		UUID:      uuid,
-		VCPUs:     domDef.VCPU,
-		MemoryKiB: domDef.MemoryKiB(),
-		XML:       xmlStr,
+		Name:         domDef.Name,
+		UUID:         uuid,
+		VCPUs:        domDef.VCPU,
+		MemoryKiB:    domDef.MemoryKiB(),
+		XML:          xmlStr,
+		InterfaceIDs: domDef.InterfaceIDs(),
 	}
 
 	if err := h.store.DefineDomain(h.hostID, dom); err != nil {

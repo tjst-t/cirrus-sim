@@ -51,6 +51,10 @@ type Domain struct {
 	CreatedAt time.Time   `json:"created_at"`
 	StartedAt time.Time   `json:"started_at,omitempty"`
 
+	// InterfaceIDs holds OVS interfaceid values from the domain XML.
+	// These correspond to OVN Logical_Switch_Port names.
+	InterfaceIDs []string `json:"interface_ids,omitempty"`
+
 	// Migration tracking fields.
 	MigrationState MigrationState `json:"migration_state,omitempty"`
 	MigrationCookie string        `json:"migration_cookie,omitempty"`

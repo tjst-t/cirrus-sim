@@ -46,13 +46,31 @@ type DomainDiskSource struct {
 
 // DomainInterface represents a network interface.
 type DomainInterface struct {
-	Type   string                `xml:"type,attr"`
-	Target DomainInterfaceTarget `xml:"target"`
+	Type        string                    `xml:"type,attr"`
+	Source      DomainInterfaceSource     `xml:"source"`
+	Target      DomainInterfaceTarget     `xml:"target"`
+	VirtualPort *DomainInterfaceVirtPort  `xml:"virtualport"`
+}
+
+// DomainInterfaceSource represents the interface source (e.g., bridge name).
+type DomainInterfaceSource struct {
+	Bridge string `xml:"bridge,attr,omitempty"`
 }
 
 // DomainInterfaceTarget represents interface target.
 type DomainInterfaceTarget struct {
 	Dev string `xml:"dev,attr"`
+}
+
+// DomainInterfaceVirtPort represents a virtualport element for OVS integration.
+type DomainInterfaceVirtPort struct {
+	Type       string                         `xml:"type,attr"`
+	Parameters DomainInterfaceVirtPortParams   `xml:"parameters"`
+}
+
+// DomainInterfaceVirtPortParams holds virtualport parameters.
+type DomainInterfaceVirtPortParams struct {
+	InterfaceID string `xml:"interfaceid,attr,omitempty"`
 }
 
 // DomainHostDev represents a host device passthrough.
@@ -101,6 +119,17 @@ func (d *DomainXML) MemoryKiB() int64 {
 		// Default is KiB
 		return d.Memory.Value
 	}
+}
+
+// InterfaceIDs returns the OVS interfaceid values from all virtualport-enabled interfaces.
+func (d *DomainXML) InterfaceIDs() []string {
+	var ids []string
+	for _, iface := range d.Devices.Interfaces {
+		if iface.VirtualPort != nil && iface.VirtualPort.Parameters.InterfaceID != "" {
+			ids = append(ids, iface.VirtualPort.Parameters.InterfaceID)
+		}
+	}
+	return ids
 }
 
 // ParseUUID parses a UUID string into a 16-byte array.

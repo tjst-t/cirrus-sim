@@ -61,6 +61,15 @@ func (s *Server) Start() {
 	}()
 }
 
+// SeedCluster creates an OVN cluster and starts its OVSDB listener.
+func (s *Server) SeedCluster(clusterID string, port int) error {
+	_, err := s.manager.CreateCluster(s.ctx, clusterID, port)
+	if err != nil {
+		return fmt.Errorf("create cluster %s: %w", clusterID, err)
+	}
+	return nil
+}
+
 // Shutdown gracefully shuts down the server and all OVSDB listeners.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.cancel()

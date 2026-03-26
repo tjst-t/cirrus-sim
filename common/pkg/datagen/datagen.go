@@ -146,8 +146,21 @@ func New() *Generator {
 	}
 }
 
+// GenerateOptions configures port allocation for generation.
+type GenerateOptions struct {
+	// LibvirtBasePort is the starting port for libvirt host listeners.
+	// Defaults to 16510 if zero.
+	LibvirtBasePort int
+}
+
 // Generate parses YAML and generates environment data.
-func (g *Generator) Generate(_ context.Context, yamlData []byte) (*GenerateResult, error) {
+// Deprecated: Use GenerateWithOptions for configurable port allocation.
+func (g *Generator) Generate(ctx context.Context, yamlData []byte) (*GenerateResult, error) {
+	return g.GenerateWithOptions(ctx, yamlData, GenerateOptions{})
+}
+
+// GenerateWithOptions parses YAML and generates environment data with configurable options.
+func (g *Generator) GenerateWithOptions(_ context.Context, yamlData []byte, opts GenerateOptions) (*GenerateResult, error) {
 	g.mu.Lock()
 	g.status = GenerateStatus{State: "running"}
 	g.mu.Unlock()
@@ -163,7 +176,10 @@ func (g *Generator) Generate(_ context.Context, yamlData []byte) (*GenerateResul
 	env := envDef.Environment
 	result := &GenerateResult{Name: env.Name}
 
-	basePort := 16510
+	basePort := opts.LibvirtBasePort
+	if basePort == 0 {
+		basePort = 16510
+	}
 	hostIdx := 0
 
 	for _, site := range env.Sites {

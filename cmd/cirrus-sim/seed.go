@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
@@ -13,6 +14,28 @@ import (
 	ovnsim "github.com/tjst-t/cirrus-sim/ovn-sim"
 	storagesim "github.com/tjst-t/cirrus-sim/storage-sim"
 )
+
+// portRange holds a start-end port range from portman.
+type portRange struct {
+	start int
+	end   int
+}
+
+// getPortRange reads PORT_START/PORT_END env vars for a given name.
+// Returns zero range if not set (fallback to defaults).
+func getPortRange(envPrefix string) portRange {
+	startStr := os.Getenv(envPrefix + "_PORT_START")
+	endStr := os.Getenv(envPrefix + "_PORT_END")
+	if startStr == "" || endStr == "" {
+		return portRange{}
+	}
+	start, err1 := strconv.Atoi(startStr)
+	end, err2 := strconv.Atoi(endStr)
+	if err1 != nil || err2 != nil {
+		return portRange{}
+	}
+	return portRange{start: start, end: end}
+}
 
 // seedFromEnvFile loads an environment YAML file and seeds all simulators with the generated data.
 func seedFromEnvFile(
@@ -34,14 +57,25 @@ func seedFromEnvFile(
 		return fmt.Errorf("parse environment YAML: %w", err)
 	}
 
+	// Check for portman-managed port ranges
+	libvirtRange := getPortRange("LIBVIRT_HOSTS")
+	ovnRange := getPortRange("OVN_CLUSTERS")
+
 	// Generate hosts and backends
 	gen := datagen.New()
-	result, err := gen.Generate(ctx, data)
+	opts := datagen.GenerateOptions{
+		LibvirtBasePort: libvirtRange.start,
+	}
+	result, err := gen.GenerateWithOptions(ctx, data, opts)
 	if err != nil {
 		return fmt.Errorf("generate environment: %w", err)
 	}
 
 	logger.Info("seeding environment", "name", result.Name, "hosts", len(result.Hosts), "backends", len(result.Backends))
+
+	if libvirtRange.start > 0 {
+		logger.Info("using portman range for libvirt hosts", "start", libvirtRange.start, "end", libvirtRange.end)
+	}
 
 	// Seed libvirt-sim hosts
 	for _, h := range result.Hosts {
@@ -63,9 +97,13 @@ func seedFromEnvFile(
 	logger.Info("seeded libvirt-sim", "hosts", len(result.Hosts))
 
 	// Seed OVN clusters
-	baseOVNPort := 6641
+	ovnBasePort := 6641
+	if ovnRange.start > 0 {
+		ovnBasePort = ovnRange.start
+		logger.Info("using portman range for OVN clusters", "start", ovnRange.start, "end", ovnRange.end)
+	}
 	for i, cluster := range envDef.Environment.OVNClusters {
-		port := baseOVNPort + i
+		port := ovnBasePort + i
 		if err := ovn.SeedCluster(cluster.Name, port); err != nil {
 			return fmt.Errorf("seed OVN cluster %s: %w", cluster.Name, err)
 		}

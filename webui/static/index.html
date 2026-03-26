@@ -288,6 +288,22 @@ body{
   display:flex;justify-content:space-between;
 }
 
+/* ── PAGER ── */
+.pager{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:6px 0;font-size:11px;color:var(--color-text-tertiary);
+}
+.pager-btns{display:flex;gap:4px}
+.pager-btn{
+  border:1px solid var(--color-border);background:var(--color-bg);
+  color:var(--color-text-secondary);
+  padding:3px 10px;border-radius:var(--radius-md);
+  font-size:11px;font-weight:500;cursor:pointer;
+  transition:background 0.15s,border-color 0.15s;
+}
+.pager-btn:hover:not(:disabled){background:var(--color-bg-subtle);border-color:var(--color-border-strong)}
+.pager-btn:disabled{opacity:0.35;cursor:default}
+
 /* ── KV DETAIL ── */
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px}
 .kv-key{color:var(--color-text-tertiary);font-weight:500}
@@ -330,7 +346,7 @@ body{
 </div>
 
 <div class="footer">
-  <span>Cirrus-Sim Dashboard v2.0</span>
+  <span id="footerVersion">Cirrus-Sim Dashboard</span>
   <span id="lastUpdate">Connecting...</span>
 </div>
 
@@ -347,7 +363,9 @@ const SIMS = [
 
 const state = {};
 let prevJSON = {};
-SIMS.forEach(s => { state[s.id] = { online: null, data: null }; prevJSON[s.id] = ''; });
+const PAGE_SIZE = 8;
+const pages = {}; // pages[simId] = current page (0-based)
+SIMS.forEach(s => { state[s.id] = { online: null, data: null }; prevJSON[s.id] = ''; pages[s.id] = 0; });
 
 // ── Clock ──
 function updateClock() {
@@ -444,7 +462,7 @@ function renderCardBody(sim) {
 
 function renderLibvirt(d) {
   const st = d.stats || {};
-  const hosts = d.hosts || [];
+  const hosts = (d.hosts || []).slice().sort((a, b) => (a.host_id || '').localeCompare(b.host_id || ''));
   let html = `<div class="metrics">
     <div class="metric"><div class="metric-val blue">${st.total_hosts||0}</div><div class="metric-lbl">Hosts</div></div>
     <div class="metric"><div class="metric-val cyan">${st.total_domains||0}</div><div class="metric-lbl">Domains</div></div>
@@ -452,7 +470,11 @@ function renderLibvirt(d) {
     <div class="metric"><div class="metric-val amber">${st.total_vcpus_used||0}</div><div class="metric-lbl">vCPUs Used</div></div>
   </div>`;
   if (hosts.length > 0) {
-    const rows = hosts.slice(0,8).map(h => {
+    const page = pages['libvirt-sim'] || 0;
+    const totalPages = Math.ceil(hosts.length / PAGE_SIZE);
+    const start = page * PAGE_SIZE;
+    const slice = hosts.slice(start, start + PAGE_SIZE);
+    const rows = slice.map(h => {
       const vcpu = (h.cpu_sockets||0)*(h.cores_per_socket||0)*(h.threads_per_core||0);
       const mem = ((h.memory_mb||0)/1024).toFixed(0);
       const st = h.state || 'online';
@@ -466,7 +488,15 @@ function renderLibvirt(d) {
     }).join('');
     html += `<table class="tbl"><thead><tr><th>Host</th><th>CPU</th><th>Mem</th><th>VMs</th><th>State</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
-    if (hosts.length > 8) html += `<div class="empty">+${hosts.length-8} more</div>`;
+    if (totalPages > 1) {
+      html += `<div class="pager">
+        <span>${start+1}-${Math.min(start+PAGE_SIZE, hosts.length)} / ${hosts.length}</span>
+        <div class="pager-btns">
+          <button class="pager-btn" data-pager="libvirt-sim" data-dir="prev" ${page===0?'disabled':''}>Prev</button>
+          <button class="pager-btn" data-pager="libvirt-sim" data-dir="next" ${page>=totalPages-1?'disabled':''}>Next</button>
+        </div>
+      </div>`;
+    }
   }
   return html;
 }
@@ -586,6 +616,12 @@ function renderGrid() {
 
     // Only update body if data changed
     if (json !== prevJSON[sim.id]) {
+      // Clamp page if data shrunk
+      if (sim.id === 'libvirt-sim' && state[sim.id].data) {
+        const total = (state[sim.id].data.hosts || []).length;
+        const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
+        if (pages[sim.id] > maxPage) pages[sim.id] = maxPage;
+      }
       const body = cardEl.querySelector('.card-body');
       body.innerHTML = renderCardBody(sim);
       prevJSON[sim.id] = json;
@@ -601,6 +637,19 @@ function renderGrid() {
           tr.addEventListener('click', () => openClusterDetail(tr.dataset.cluster));
         });
       }
+      // Attach pager handlers
+      body.querySelectorAll('[data-pager]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const simId = btn.dataset.pager;
+          const dir = btn.dataset.dir;
+          if (dir === 'next') pages[simId]++;
+          else if (dir === 'prev') pages[simId] = Math.max(0, pages[simId] - 1);
+          // Force re-render this card
+          prevJSON[simId] = '';
+          renderGrid();
+        });
+      });
     }
   });
 }
@@ -644,7 +693,7 @@ function openDetail(simId) {
 
 function openLibvirtDetail(d) {
   const st = d.stats || {};
-  const hosts = d.hosts || [];
+  const hosts = (d.hosts || []).slice().sort((a, b) => (a.host_id || '').localeCompare(b.host_id || ''));
   let html = `<div class="detail-section-title">Overview</div>
     <div class="kv">
       <span class="kv-key">Total Hosts</span><span class="kv-val">${st.total_hosts||0}</span>
@@ -888,6 +937,11 @@ async function poll() {
   document.getElementById('lastUpdate').textContent =
     'Updated: ' + new Date().toLocaleTimeString();
 }
+
+// ── Fetch version ──
+fetchJSON('/api/version').then(v => {
+  document.getElementById('footerVersion').textContent = 'Cirrus-Sim Dashboard ' + (v.version || '');
+}).catch(() => {});
 
 poll();
 setInterval(poll, 3000);

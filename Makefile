@@ -89,6 +89,8 @@ serve: build-unified
 	  --name awx-sim \
 	  --name netbox-sim \
 	  --name storage-sim \
+	  --range libvirt-hosts=20 \
+	  --range ovn-clusters=5 \
 	  --output $(PORTMAN_ENV)
 	@bash -c '\
 	  set -a; source $(PORTMAN_ENV); set +a; \
@@ -120,10 +122,12 @@ serve: build-unified
 	  echo "  Log: $(LOG_FILE)"; \
 	  echo "  Stop: make stop"'
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 build-unified:
-	@echo "Building cirrus-sim..."
+	@echo "Building cirrus-sim $(VERSION)..."
 	@mkdir -p bin
-	@cd cmd/cirrus-sim && go build -o ../../bin/cirrus-sim .
+	@cd cmd/cirrus-sim && go build -ldflags "-X main.version=$(VERSION)" -o ../../bin/cirrus-sim .
 
 stop:
 	@if [ -f $(PID_FILE) ]; then \

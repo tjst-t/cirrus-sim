@@ -35,6 +35,9 @@ import (
 	"github.com/tjst-t/cirrus-sim/webui"
 )
 
+// version is set at build time via -ldflags.
+var version = "dev"
+
 // Shutdowner is implemented by all simulator servers.
 type Shutdowner interface {
 	Start()
@@ -42,6 +45,7 @@ type Shutdowner interface {
 }
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	commonPort := flag.String("common", envOrDefault("COMMON_PORT", "8000"), "common API port")
 	libvirtPort := flag.String("libvirt", envOrDefault("LIBVIRT_SIM_PORT", "8100"), "libvirt-sim management port")
 	ovnPort := flag.String("ovn", envOrDefault("OVN_SIM_PORT", "8200"), "ovn-sim management port")
@@ -51,6 +55,13 @@ func main() {
 	dashboardPort := flag.String("dashboard", envOrDefault("DASHBOARD_PORT", "8080"), "dashboard web UI port")
 	envFile := flag.String("env", envOrDefault("CIRRUS_SIM_ENV", ""), "environment YAML file to seed on startup")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("cirrus-sim", version)
+		os.Exit(0)
+	}
+
+	webui.Version = version
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -107,7 +118,7 @@ func main() {
 	}
 
 	fmt.Fprintf(os.Stderr, "\n")
-	fmt.Fprintf(os.Stderr, "  cirrus-sim is running\n")
+	fmt.Fprintf(os.Stderr, "  cirrus-sim %s is running\n", version)
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
 	fmt.Fprintf(os.Stderr, "  Dashboard                http://localhost:%s\n", *dashboardPort)
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")

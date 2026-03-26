@@ -29,6 +29,9 @@ func DefaultEndpoints() Endpoints {
 	}
 }
 
+// Version is the application version, set by the caller (typically from ldflags).
+var Version = "dev"
+
 // Server is the dashboard web UI server.
 type Server struct {
 	httpServer *http.Server
@@ -64,6 +67,12 @@ func New(port string, endpoints Endpoints, logger *slog.Logger) *Server {
 		if _, writeErr := w.Write(data); writeErr != nil {
 			logger.Warn("failed to write response", "error", writeErr)
 		}
+	})
+
+	// Version endpoint
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"version":%q}`, Version)
 	})
 
 	// Aggregated status

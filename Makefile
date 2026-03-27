@@ -82,6 +82,7 @@ serve: build-unified
 	  rm -f $(PID_FILE); \
 	fi
 	@portman env \
+	  --name postgres \
 	  --name common \
 	  --name dashboard:expose \
 	  --name libvirt-sim \
@@ -96,6 +97,7 @@ serve: build-unified
 	  set -a; source $(PORTMAN_ENV); set +a; \
 	  echo "==> Starting cirrus-sim (log: $(LOG_FILE))"; \
 	  nohup ./bin/cirrus-sim \
+	    -postgres=$$POSTGRES_PORT \
 	    -common=$$COMMON_PORT \
 	    -dashboard=$$DASHBOARD_PORT \
 	    -libvirt=$$LIBVIRT_SIM_PORT \

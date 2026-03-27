@@ -9,5 +9,6 @@ use (
 	./netbox-sim
 	./load-gen
 	./webui
+	./postgres
 	./cmd/cirrus-sim
 )

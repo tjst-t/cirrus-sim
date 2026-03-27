@@ -31,6 +31,7 @@ import (
 	libvirtsim "github.com/tjst-t/cirrus-sim/libvirt-sim"
 	netboxsim "github.com/tjst-t/cirrus-sim/netbox-sim"
 	ovnsim "github.com/tjst-t/cirrus-sim/ovn-sim"
+	pgsim "github.com/tjst-t/cirrus-sim/postgres"
 	storagesim "github.com/tjst-t/cirrus-sim/storage-sim"
 	"github.com/tjst-t/cirrus-sim/webui"
 )
@@ -53,6 +54,7 @@ func main() {
 	netboxPort := flag.String("netbox", envOrDefault("NETBOX_SIM_PORT", "8400"), "netbox-sim port")
 	storagePort := flag.String("storage", envOrDefault("STORAGE_SIM_PORT", "8500"), "storage-sim port")
 	dashboardPort := flag.String("dashboard", envOrDefault("DASHBOARD_PORT", "8080"), "dashboard web UI port")
+	postgresPort := flag.String("postgres", envOrDefault("POSTGRES_PORT", "5432"), "embedded PostgreSQL port")
 	envFile := flag.String("env", envOrDefault("CIRRUS_SIM_ENV", ""), "environment YAML file to seed on startup")
 	flag.Parse()
 
@@ -77,6 +79,7 @@ func main() {
 	}
 
 	// Create simulator instances
+	pgSim := pgsim.New(*postgresPort, logger.With("sim", "postgres"))
 	libvirtSim := libvirtsim.New(*libvirtPort, logger.With("sim", "libvirt-sim"))
 	ovnSim := ovnsim.New(*ovnPort, logger.With("sim", "ovn-sim"))
 	storageSim := storagesim.New(*storagePort, logger.With("sim", "storage-sim"))
@@ -86,6 +89,7 @@ func main() {
 		name string
 		srv  Shutdowner
 	}{
+		{"postgres", pgSim},
 		{"common", common.New(*commonPort, logger.With("sim", "common"))},
 		{"libvirt-sim", libvirtSim},
 		{"ovn-sim", ovnSim},
@@ -96,6 +100,7 @@ func main() {
 	}
 
 	logger.Info("starting cirrus-sim (unified)",
+		"postgres", *postgresPort,
 		"common", *commonPort,
 		"libvirt-sim", *libvirtPort,
 		"ovn-sim", *ovnPort,
@@ -123,6 +128,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
 	fmt.Fprintf(os.Stderr, "  Dashboard                http://localhost:%s\n", *dashboardPort)
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────────────────\n")
+	fmt.Fprintf(os.Stderr, "  postgres                 %s\n", pgSim.ConnectionURL())
 	fmt.Fprintf(os.Stderr, "  common (events/faults)   http://localhost:%s\n", *commonPort)
 	fmt.Fprintf(os.Stderr, "  libvirt-sim (management) http://localhost:%s\n", *libvirtPort)
 	fmt.Fprintf(os.Stderr, "  ovn-sim (management)     http://localhost:%s\n", *ovnPort)

@@ -83,6 +83,7 @@ serve: build-unified
 	fi
 	@portman env \
 	  --name postgres \
+	  --name postgres-mgmt \
 	  --name common \
 	  --name dashboard:expose \
 	  --name libvirt-sim \
@@ -98,6 +99,7 @@ serve: build-unified
 	  echo "==> Starting cirrus-sim (log: $(LOG_FILE))"; \
 	  nohup ./bin/cirrus-sim \
 	    -postgres=$$POSTGRES_PORT \
+	    -postgres-mgmt=$$POSTGRES_MGMT_PORT \
 	    -common=$$COMMON_PORT \
 	    -dashboard=$$DASHBOARD_PORT \
 	    -libvirt=$$LIBVIRT_SIM_PORT \

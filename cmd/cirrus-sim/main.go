@@ -55,6 +55,7 @@ func main() {
 	storagePort := flag.String("storage", envOrDefault("STORAGE_SIM_PORT", "8500"), "storage-sim port")
 	dashboardPort := flag.String("dashboard", envOrDefault("DASHBOARD_PORT", "8080"), "dashboard web UI port")
 	postgresPort := flag.String("postgres", envOrDefault("POSTGRES_PORT", "5432"), "embedded PostgreSQL port")
+	postgresMgmtPort := flag.String("postgres-mgmt", envOrDefault("POSTGRES_MGMT_PORT", "8600"), "PostgreSQL management API port")
 	envFile := flag.String("env", envOrDefault("CIRRUS_SIM_ENV", ""), "environment YAML file to seed on startup")
 	flag.Parse()
 
@@ -76,10 +77,11 @@ func main() {
 		"awx-sim":     fmt.Sprintf("http://localhost:%s", *awxPort),
 		"netbox-sim":  fmt.Sprintf("http://localhost:%s", *netboxPort),
 		"storage-sim": fmt.Sprintf("http://localhost:%s", *storagePort),
+		"postgres":    fmt.Sprintf("http://localhost:%s", *postgresMgmtPort),
 	}
 
 	// Create simulator instances
-	pgSim := pgsim.New(*postgresPort, logger.With("sim", "postgres"))
+	pgSim := pgsim.New(*postgresPort, *postgresMgmtPort, logger.With("sim", "postgres"))
 	libvirtSim := libvirtsim.New(*libvirtPort, logger.With("sim", "libvirt-sim"))
 	ovnSim := ovnsim.New(*ovnPort, logger.With("sim", "ovn-sim"))
 	storageSim := storagesim.New(*storagePort, logger.With("sim", "storage-sim"))

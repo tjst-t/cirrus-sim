@@ -359,6 +359,7 @@ const SIMS = [
   { id:'awx-sim',     label:'AWX-Sim',     port:8300 },
   { id:'netbox-sim',  label:'NetBox-Sim',  port:8400 },
   { id:'common',      label:'Common',      port:8000 },
+  { id:'postgres',    label:'PostgreSQL',  port:5432 },
 ];
 
 const state = {};
@@ -410,6 +411,12 @@ async function probeSimulator(sim) {
       data = await fetchJSON('/proxy/awx-sim/sim/stats');
     } else if (sim.id === 'netbox-sim') {
       data = await fetchJSON('/proxy/netbox-sim/sim/stats');
+    } else if (sim.id === 'postgres') {
+      const [stats, tables] = await Promise.all([
+        fetchJSON('/proxy/postgres/sim/stats'),
+        fetchJSON('/proxy/postgres/sim/tables').catch(() => []),
+      ]);
+      data = { stats, tables: Array.isArray(tables) ? tables : [] };
     }
     state[sim.id] = { online: true, data };
   } catch {
@@ -457,6 +464,7 @@ function renderCardBody(sim) {
   if (sim.id === 'awx-sim') return renderAWX(d);
   if (sim.id === 'netbox-sim') return renderNetbox(d);
   if (sim.id === 'common') return renderCommon(d);
+  if (sim.id === 'postgres') return renderPostgres(d);
   return '';
 }
 
@@ -593,6 +601,29 @@ function renderCommon(d) {
   return html;
 }
 
+function renderPostgres(d) {
+  const st = d.stats || {};
+  const tables = d.tables || [];
+  let html = `<div class="metrics">
+    <div class="metric"><div class="metric-val blue">${st.table_count||0}</div><div class="metric-lbl">Tables</div></div>
+    <div class="metric"><div class="metric-val cyan">${st.db_size||'–'}</div><div class="metric-lbl">Size</div></div>
+  </div>`;
+  if (tables.length > 0) {
+    const rows = tables.map(t =>
+      `<tr class="clickable" data-pgtable="${t.name}">
+        <td class="mono">${t.name}</td>
+        <td>${t.column_count}</td>
+        <td>${t.row_count}</td>
+      </tr>`
+    ).join('');
+    html += `<table class="tbl"><thead><tr><th>Table</th><th>Cols</th><th>Rows</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } else {
+    html += '<div class="empty">No tables yet</div>';
+  }
+  return html;
+}
+
 // ── Diff-based Grid Update ──
 function renderGrid() {
   const grid = document.getElementById('grid');
@@ -635,6 +666,11 @@ function renderGrid() {
       if (sim.id === 'ovn-sim') {
         body.querySelectorAll('[data-cluster]').forEach(tr => {
           tr.addEventListener('click', () => openClusterDetail(tr.dataset.cluster));
+        });
+      }
+      if (sim.id === 'postgres') {
+        body.querySelectorAll('[data-pgtable]').forEach(tr => {
+          tr.addEventListener('click', () => openPgTableDetail(tr.dataset.pgtable));
         });
       }
       // Attach pager handlers
@@ -689,6 +725,7 @@ function openDetail(simId) {
   else if (simId === 'awx-sim') openAWXDetail(s.data);
   else if (simId === 'netbox-sim') openNetboxDetail(s.data);
   else if (simId === 'common') openCommonDetail(s.data);
+  else if (simId === 'postgres') openPostgresDetail(s.data);
 }
 
 function openLibvirtDetail(d) {
@@ -927,6 +964,79 @@ function openCommonDetail(d) {
     html += '<div class="empty">No fault rules configured</div>';
   }
   showDetail('Common', html);
+}
+
+function openPostgresDetail(d) {
+  const st = d.stats || {};
+  const tables = d.tables || [];
+  let html = `<div class="detail-section-title">Database</div>
+    <div class="kv">
+      <span class="kv-key">Database</span><span class="kv-val">${st.database||'-'}</span>
+      <span class="kv-key">Port</span><span class="kv-val">${st.port||'-'}</span>
+      <span class="kv-key">Size</span><span class="kv-val">${st.db_size||'-'}</span>
+      <span class="kv-key">Tables</span><span class="kv-val">${st.table_count||0}</span>
+      <span class="kv-key">URL</span><span class="kv-val">${st.url||'-'}</span>
+    </div>`;
+  if (tables.length > 0) {
+    html += `<div class="detail-section-title">Tables (${tables.length})</div>
+      <table class="tbl"><thead><tr><th>Table</th><th>Columns</th><th>Rows</th></tr></thead><tbody>`;
+    tables.forEach(t => {
+      html += `<tr class="clickable" data-pgtable-detail="${t.name}">
+        <td class="mono">${t.name}</td><td>${t.column_count}</td><td>${t.row_count}</td></tr>`;
+    });
+    html += '</tbody></table>';
+  }
+  showDetail('PostgreSQL', html);
+  detailBody.querySelectorAll('[data-pgtable-detail]').forEach(tr => {
+    tr.addEventListener('click', () => openPgTableDetail(tr.dataset.pgtableDetail));
+  });
+}
+
+async function openPgTableDetail(tableName) {
+  showDetail(`Table: ${tableName}`, '<div class="empty">Loading...</div>');
+  try {
+    const [data, schema] = await Promise.all([
+      fetchJSON(`/proxy/postgres/sim/tables/${tableName}?limit=50`),
+      fetchJSON(`/proxy/postgres/sim/tables/${tableName}/schema`),
+    ]);
+
+    let html = `<div class="detail-section-title">Schema</div>
+      <table class="tbl"><thead><tr><th>Column</th><th>Type</th><th>Nullable</th></tr></thead><tbody>`;
+    (schema.columns || []).forEach(c => {
+      html += `<tr><td class="mono">${c.name}</td><td>${c.type}</td><td>${c.nullable}</td></tr>`;
+    });
+    html += '</tbody></table>';
+
+    html += `<div class="detail-section-title">Data (${data.total} rows)</div>`;
+    const cols = data.columns || [];
+    const rows = data.rows || [];
+    if (rows.length > 0) {
+      html += '<div style="overflow-x:auto">';
+      html += `<table class="tbl"><thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>`;
+      rows.forEach(r => {
+        html += '<tr>';
+        cols.forEach(c => {
+          let v = r[c];
+          if (v === null || v === undefined) v = '<span style="color:var(--color-text-tertiary)">NULL</span>';
+          else if (typeof v === 'object') v = JSON.stringify(v);
+          else v = String(v);
+          if (v.length > 60) v = v.substring(0, 57) + '...';
+          html += `<td class="mono">${v}</td>`;
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+      if (data.total > rows.length) {
+        html += `<div class="empty">Showing ${rows.length} of ${data.total} rows</div>`;
+      }
+    } else {
+      html += '<div class="empty">No rows</div>';
+    }
+
+    showDetail(`Table: ${tableName}`, html);
+  } catch (e) {
+    showDetail(`Table: ${tableName}`, `<div class="offline-banner">Failed to load: ${e.message}</div>`);
+  }
 }
 
 // ── Poll Loop ──

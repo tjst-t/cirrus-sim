@@ -133,6 +133,11 @@ build-unified:
 	@mkdir -p bin
 	@cd cmd/cirrus-sim && go build -ldflags "-X main.version=$(VERSION)" -o ../../bin/cirrus-sim .
 
+deploy: build-unified
+	@echo "Installing cirrus-sim $(VERSION) to /usr/local/bin..."
+	@sudo cp ./bin/cirrus-sim /usr/local/bin/cirrus-sim
+	@echo "Installed: $$(cirrus-sim -version)"
+
 stop:
 	@if [ -f $(PID_FILE) ]; then \
 	  PID=$$(cat $(PID_FILE)); \

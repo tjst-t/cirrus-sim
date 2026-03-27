@@ -2,16 +2,18 @@
 
 Simulator suite for [Cirrus IaaS](https://github.com/tjst-t/cirrus) development. Each simulator speaks the same protocol as its production counterpart, enabling full-stack IaaS development and testing without physical infrastructure.
 
-## Simulators
+## Components
 
-| Simulator | Protocol | Description |
+| Component | Protocol | Description |
 |-----------|----------|-------------|
 | libvirt-sim | libvirt RPC (XDR/TCP) | Compute host simulation (VM lifecycle, migration, resources) |
 | ovn-sim | OVSDB (JSON-RPC/TCP) | OVN Northbound DB (virtual networking) |
 | storage-sim | Cirrus Storage API (REST) | Block storage backend (volumes, snapshots, clones) |
-| awx-sim | AWX REST API | Ansible AWX job execution |
-| netbox-sim | NetBox REST API | DCIM/CMDB (physical topology) |
+| awx-sim | AWX REST API v2 | Ansible AWX job execution |
+| netbox-sim | NetBox REST API v4 | DCIM/CMDB (physical topology, failure domains) |
+| postgres | PostgreSQL (embedded) | Cirrus本体のデータベース |
 | common | REST | Shared services (fault injection, event log, data generator) |
+| dashboard | HTTP | Operations dashboard (Web UI) |
 
 ## Quick Start
 
@@ -20,10 +22,10 @@ Simulator suite for [Cirrus IaaS](https://github.com/tjst-t/cirrus) development.
 - Go 1.22+
 - [portman](https://github.com/tjst-t/port-manager) (port management)
 
-### Start all simulators
+### Start all
 
 ```bash
-# Build and start with small environment (10 hosts, 1 OVN cluster, 1 storage backend)
+# Build and start with small environment (10 hosts, 1 OVN cluster, 1 storage backend, PostgreSQL)
 make serve
 
 # Stop
@@ -35,12 +37,20 @@ make logs
 
 `make serve` は以下を自動で行います:
 
-1. portman でポートを確保（管理API + ホストRPC + OVSDBの全ポート）
+1. portman でポートを確保（管理API + ホストRPC + OVSDB + PostgreSQLの全ポート）
 2. unified binary をビルド
-3. `environments/small.yaml` からホスト/クラスタ/バックエンドをシード
-4. バックグラウンドで起動
+3. PostgreSQL を組み込み起動（Cirrus用DB自動作成）
+4. `environments/small.yaml` からホスト/クラスタ/バックエンド/物理トポロジをシード
+5. バックグラウンドで起動
 
 起動後、ダッシュボードのURLがターミナルに表示されます。
+
+### Install binary
+
+```bash
+# Build and install to /usr/local/bin
+make deploy
+```
 
 ### Docker Compose (alternative)
 
@@ -49,6 +59,24 @@ docker-compose up -d
 ```
 
 ## Cirrus からの接続方法
+
+### PostgreSQL
+
+起動時にCirrus用のデータベースが自動作成されます。接続URLは起動バナーに表示されます。
+
+```
+postgresql://cirrus:cirrus@localhost:<POSTGRES_PORT>/cirrus
+```
+
+環境変数でカスタマイズ可能:
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `POSTGRES_PORT` | 5432 | PostgreSQL listen port |
+| `POSTGRES_DATABASE` | cirrus | データベース名 |
+| `POSTGRES_USERNAME` | cirrus | ユーザ名 |
+| `POSTGRES_PASSWORD` | cirrus | パスワード |
+| `POSTGRES_DATA_DIR` | (temp) | データディレクトリ（空=一時ディレクトリ、停止時削除） |
 
 ### libvirt (VM管理)
 
@@ -94,11 +122,11 @@ l.DomainCreate(dom)
 
 ```bash
 # Logical Switch 作成
-ovn-nbctl --db=tcp:localhost:17100 ls-add tenant-net-001
+ovn-nbctl --db=tcp:localhost:<OVN_PORT> ls-add tenant-net-001
 
-# Logical Switch Port 作成（interfaceidと一致させる）
-ovn-nbctl --db=tcp:localhost:17100 lsp-add tenant-net-001 lsp-uuid-001
-ovn-nbctl --db=tcp:localhost:17100 lsp-set-addresses lsp-uuid-001 "fa:16:3e:aa:bb:cc 10.0.0.10"
+# Logical Switch Port 作成（libvirtのinterfaceidと一致させる）
+ovn-nbctl --db=tcp:localhost:<OVN_PORT> lsp-add tenant-net-001 lsp-uuid-001
+ovn-nbctl --db=tcp:localhost:<OVN_PORT> lsp-set-addresses lsp-uuid-001 "fa:16:3e:aa:bb:cc 10.0.0.10"
 ```
 
 対応OVSDB操作: transact (insert/select/update/delete/mutate), monitor, monitor_cancel, get_schema, list_dbs
@@ -135,17 +163,37 @@ curl -X POST http://localhost:<AWX_SIM_PORT>/api/v2/job_templates/ \
   -d '{"name":"deploy-vm","expected_duration_ms":5000,"failure_rate":0.01}'
 
 # ジョブ実行
-curl -X POST http://localhost:<AWX_SIM_PORT>/api/v2/job_templates/1/launch
+curl -X POST http://localhost:<AWX_SIM_PORT>/api/v2/job_templates/1/launch/
+
+# ジョブ状態確認
+curl http://localhost:<AWX_SIM_PORT>/api/v2/jobs/1/
+
+# ジョブキャンセル
+curl -X POST http://localhost:<AWX_SIM_PORT>/api/v2/jobs/1/cancel/
 ```
 
-### NetBox (物理トポロジ)
+### NetBox (物理トポロジ / 障害ドメイン)
+
+NetBox v4互換API。go-netbox v4クライアントライブラリで動作確認済み。
 
 ```bash
-# サイト/ラック/デバイス一覧
+# サイト一覧
 curl http://localhost:<NETBOX_SIM_PORT>/api/dcim/sites/
+
+# ロケーション階層（障害トポロジ: サイト → フロア → ラック列）
+curl http://localhost:<NETBOX_SIM_PORT>/api/dcim/locations/
+curl http://localhost:<NETBOX_SIM_PORT>/api/dcim/locations/?parent_id=0  # トップレベルのみ
+
+# ラック（tor_switch, power_circuit付き）
 curl http://localhost:<NETBOX_SIM_PORT>/api/dcim/racks/
+curl http://localhost:<NETBOX_SIM_PORT>/api/dcim/racks/?site_id=1
+
+# デバイス（cirrus_host_idでlibvirt-simのホストと紐付け）
 curl http://localhost:<NETBOX_SIM_PORT>/api/dcim/devices/
+curl http://localhost:<NETBOX_SIM_PORT>/api/dcim/devices/?role=server
 ```
+
+レスポンスはNetBox v4形式: url, display, slug, status(value+label), nested refs, timestamps, custom_fields含む。
 
 ## VM作成の全体フロー（Cirrus想定）
 
@@ -186,21 +234,26 @@ Cirrusが1台のVMを作成する際の典型的なフローです:
 cirrus-sim -env environments/my-env.yaml
 ```
 
+シード時にNetBox物理トポロジ（サイト→ラック列→ラック→デバイス）も自動投入されます。各デバイスの`cirrus_host_id`カスタムフィールドでlibvirt-simのホストIDと対応します。
+
+## Dashboard
+
+Web UIダッシュボードで全シミュレータの状態を確認できます。
+
+- 各シミュレータの統計情報（ホスト数、ドメイン数、ボリューム数等）
+- ホスト/クラスタ/バックエンドの詳細ドリルダウン
+- PostgreSQLテーブルブラウザ（スキーマとデータの閲覧）
+- 3秒間隔の自動更新（差分更新でちらつきなし）
+
 ## 管理API
 
 各シミュレータは `/sim/` プレフィックスで管理APIを提供します:
 
 ```bash
-# ホスト一覧
-GET /sim/hosts
-
-# ホスト追加（動的にホストを追加する場合）
-POST /sim/hosts
-{"host_id":"host-new","libvirt_port":17099,"cpu_sockets":2,...}
-
-# ホスト状態変更（メンテナンスモードなど）
-PUT /sim/hosts/{host_id}/state
-{"state":"maintenance"}
+# ホスト一覧・追加・状態変更
+GET  /sim/hosts
+POST /sim/hosts  {"host_id":"host-new","libvirt_port":17099,"cpu_sockets":2,...}
+PUT  /sim/hosts/{host_id}/state  {"state":"maintenance"}
 
 # 統計
 GET /sim/stats
@@ -214,6 +267,11 @@ POST http://localhost:<COMMON_PORT>/api/v1/faults
 
 # イベントログ
 GET http://localhost:<COMMON_PORT>/api/v1/events?simulator=libvirt-sim&limit=50
+
+# PostgreSQLテーブル一覧・データ・スキーマ
+GET /sim/tables
+GET /sim/tables/{name}?limit=50
+GET /sim/tables/{name}/schema
 ```
 
 ## Development
@@ -232,9 +290,16 @@ make lint
 make build-libvirt-sim
 make test-libvirt-sim
 
-# Build unified binary with version
+# Build unified binary
 make build-unified
 ./bin/cirrus-sim -version
+
+# Build and install to /usr/local/bin
+make deploy
+
+# Run integration tests (requires running simulators)
+cd tests/integration
+go test -tags integration -v .
 ```
 
 ## Architecture
